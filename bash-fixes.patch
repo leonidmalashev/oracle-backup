@@ -1,0 +1,1756 @@
+diff --git a/./DEPLOYMENT.md b/./DEPLOYMENT.md
+new file mode 100644
+index 0000000..ac7ac13
+--- /dev/null
++++ b/./DEPLOYMENT.md
+@@ -0,0 +1,101 @@
++# Встановлення на 192.168.56.11
++
++Користувач: oracle. База: orcl (Oracle 19.31).
++Скрипти: /home/oracle/dba-scripts/oracle-backup
++Резервні копії: /u01/app/oracle/backups/orcl
++Журнали: /u01/app/oracle/backups/logs
++
++На сервері встановлено п'ять файлів цього проєкту з закінченнями рядків LF.
++У серверних конфігураціях замінено старий шлях на /u01/app/oracle/backups.
++Для безпечного першого запуску закоментовано CROSSCHECK та DELETE NOPROMPT,
++а DELETE INPUT прибрано: наявні копії та архівні журнали не видаляються.
++Локальні вихідні скрипти й конфігурації залишено без змін.
++Автоматичний розклад не встановлено. Без політики очищення копії накопичуються.
++
++Запуск під oracle (значення task: database-i0, database-i1, archivelog, restore_validate):
++
++```bash
++task=database-i0
++/home/oracle/dba-scripts/oracle-backup/job-runner.sh \
++  --logs-dir /u01/app/oracle/backups/logs \
++  --job-name "orcl-$task" \
++  --job-script rman-backup.sh \
++  --job-args "--sid orcl --task $task --logs-dir /u01/app/oracle/backups/logs --base-backup-dir /u01/app/oracle/backups"
++```
++
++```
++task=archivelog
++/home/oracle/dba-scripts/oracle-backup/job-runner.sh --help
++
++task=archivelog
++/home/oracle/dba-scripts/oracle-backup/rman-backup.sh --help
++
++task=archivelog
++/home/oracle/dba-scripts/oracle-backup/rman-backup.sh --sid orcl --task $task --logs-dir /u01/app/oracle/backups/logs --base-backup-dir /u01/app/oracle/backups
++```
++
++```bash
++task=archivelog
++/home/oracle/dba-scripts/oracle-backup/job-runner.sh \
++  --logs-dir /u01/app/oracle/backups/logs \
++  --job-name test \
++  --job-script rman-backup.sh \
++  --job-args "--sid orcl --task $task --logs-dir /u01/app/oracle/backups/logs --base-backup-dir /u01/app/oracle/backups"
++```
++
++restore_validate читає резервні копії для перевірки без перезапису робочої бази.
++Ця перевірка не замінює повного пробного відновлення в окрему базу.
++## Результати тестування 2026-09-28
++
++Усі завдання запущено через job-runner.sh, кожне завершилося з кодом 0.
++Час наведено за годинником віртуальної машини.
++
++| Завдання | Початок | Завершення | Результат |
++| --- | --- | --- | --- |
++| database-i0 | 16:06:57 | 16:13:02 | Успішно |
++| database-i1 | 16:13:24 | 16:14:56 | Успішно |
++| archivelog | 16:14:56 | 16:15:06 | Успішно |
++| restore_validate | 16:15:06 | 16:19:04 | Успішно |
++
++У журналах немає повідомлень RMAN-xxxxx або ORA-xxxxx.
++RESTORE DATABASE VALIDATE, перевірки SPFILE та CONTROLFILE з AUTOBACKUP успішні.
++Автокопії SPFILE та CONTROLFILE перевірено в наявній recovery area +FRA.
++Повного відновлення в окрему базу та перевірки RESTORE ARCHIVELOG не виконували.
++Обсяг тестових резервних копій приблизно 3 ГБ.
++
++## Оновлення блокування завдань 2026-09-28
++
++На сервер розгорнуто оновлений `job-runner.sh`: атомарне блокування через
++`flock` замість PID-файлів та `eval`. Потрібні Linux, `flock` з util-linux
++і GNU `stat`. Блокування окреме для кожного `--job-name` у межах користувача.
++Імена можуть містити латинські літери, цифри, `_`, `-`, `.`, але не можуть
++починатися з `-` або `.`.
++
++Файли блокування зберігаються у `$HOME/.job-runner-locks` (власник — користувач
++запуску, права каталогу `700`). Їх не потрібно видаляти: блокування знімає ОС
++після закриття дескрипторів. Дочірнє завдання успадковує дескриптор блокування,
++тому загибель обгортки не дозволяє запустити дублікат, поки завдання працює.
++Старі `/tmp/job-runner.*.pid` не читаються та не впливають на запуск.
++Повторний виклик активного завдання записує попередження й повертає код `0`.
++
++Попередня серверна версія збережена у
++`/home/oracle/dba-scripts/oracle-backup/.deploy-locks-20260928-01/previous-job-runner.sh`.
++Решта чотири серверні файли не змінювалися, що підтверджено SHA-256.
++SHA-256 встановленого `job-runner.sh`:
++`cd59925b6d53321e3e83c54e6772287df2baec4a86d7f9b5b3a4d4d924d89414`.
++
++Ізольовані тести `tests/job-runner-locks.sh` пройшли на Linux-сервері перед
++заміною та після встановлення скрипту:
++
++- Ігнорування підробленого старого PID-файлу без виконання його вмісту.
++- Рівно одне дочірнє завдання при 12 одночасних викликах.
++- Збереження коду помилки дочірнього завдання та можливість наступного запуску.
++- Збереження блокування дочірнім процесом після `SIGKILL` обгортки й звільнення після завершення дитини.
++- Відхилення символічного посилання замість lock-файлу.
++- Відхилення імені завдання зі спробою виходу за межі каталогу.
++
++Реальне завдання `orcl-archivelog` через встановлений скрипт виконано
++16:47:08–16:47:23 за годинником сервера, код завершення `0`.
++Створено копію архівних журналів sequence 55–56 та AUTOBACKUP CONTROLFILE/SPFILE.
++Журнал `/u01/app/oracle/backups/logs/al_2026-09-28T164708.log` не містить
++помилок RMAN/ORA; після завершення блокування вільне.
+diff --git a/./bash-fixes.patch b/./bash-fixes.patch
+new file mode 100644
+index 0000000..e69de29
+diff --git a/./job-runner.conf b/./job-runner.conf
+new file mode 100644
+index 0000000..f10b931
+--- /dev/null
++++ b/./job-runner.conf
+@@ -0,0 +1,8 @@
++# --
++# job-runner.conf - Файл конфигурации скрипта job-runner.sh
++# --
++# $Id: job-runner.conf leonid.malashev@gmail.com $
++#-------------------------------------------------------------------------------
++
++export PATH=/usr/local/bin:$PATH
++LOGS_DIR=/media/sf_Downloads/TEMP/ORABACKUP/logs
+diff --git "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/job-runner.sh" b/./job-runner.sh
+index 6996177..232e78c 100644
+--- "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/job-runner.sh"
++++ b/./job-runner.sh
+@@ -1,34 +1,242 @@
+ #!/bin/bash
+ # --
+-# job-runner.sh - Скрипт запуска заданий
++# job-runner.sh - ?????? ??????? ???????
+ # --
+ # $Id: job-runner.sh leonid.malashev@gmail.com $
+ #-------------------------------------------------------------------------------
+ #set -x
+-set -euo pipefail
+-
+-USAGE="Usage:
+-  $(basename $0) --logs-dir \/media/sf_Downloads/TEMP/ORABACKUP/logs\"
+-                 -n|--job-name [database-i0|database-i1|archivelog|restore_validate]
+-                 -j|--job-script rman-backup.sh
+-                    --sid orcl \
+-                    --task database-i0 \
+-                    --logs-dir \"/media/sf_Downloads/TEMP/ORABACKUP/logs\" \
+-                    --base-backup-dir \"/media/sf_Downloads/TEMP/ORABACKUP\"
+-"
++set -Eeuo pipefail
++
++USAGE="Usage: $(basename "$0") --logs-dir=DIR --job-name=NAME --job-script=SCRIPT [--job-args='ARGUMENTS'] [--silent] [--dry-run]"
++_verbose=false
++_silent=false
++_dry_run=false
++_job_name=""
++_job_script=""
++_job_args=""
++_logs_dir=""
++_child_pid=""
++_signal=""
++_job_started=false
++_lock_name=""
++POSITIONAL_ARGS=()
++job_args=()
++
++require_value() {
++    if [[ $# -lt 2 ]]; then
++        printf 'ERROR: Option %s requires a value\n%s\n' "$1" "$USAGE" >&2
++        exit 2
++    fi
++}
++
++print_help() {
++    cat << EOF
++$USAGE
++
++Options:
++      --job-name=NAME       Logical job name for logs and generic locking.
++      --job-script=SCRIPT   Script from this directory to run.
++      --job-args=ARGS       Argument string passed to the job script.
++      --logs-dir=DIR        Directory for job-runner logs.
++      --silent              Suppress routine success messages; keep errors.
++      --dry-run             Show what would run. For rman-backup.sh, passed through.
++      --help                Show this help.
++
++RMAN jobs:
++  rman-backup.sh jobs require --sid=SID and --task=TASK inside --job-args.
++  Their lock key is rman-backup.<SID>.<task>.
++EOF
++}
++
++log_info() {
++    $_silent || printf '%s\n' "$*"
++}
++
++log_warn() {
++    $_silent || printf '%s\n' "$*"
++}
++
++log_escape() {
++    local value=${1//\\/\\\\}
++    value=${value//$'\n'/\\n}
++    value=${value//$'\t'/\\t}
++    value=${value// /\\ }
++    printf '%s' "$value"
++}
++
++log_stamp() {
++    date '+%b %e %T'
++}
++
++log_prefix() {
++    printf '%s %s %s[%s]:' "$(log_stamp)" "$(hostname -s 2>/dev/null || hostname)" "$(basename "$0")" "$$"
++}
++
++# Parse the existing --job-args string without evaluating shell code.
++# Support whitespace, single/double quotes, escapes, and empty quoted arguments.
++# Expansion ($(), variables, globs) is deliberately not performed.
++parse_job_args() {
++    local input=$1 state=plain word="" char next started=false i
++    for ((i=0; i<${#input}; i++)); do
++        char=${input:i:1}
++        case $state in
++            single)
++                if [[ $char == "'" ]]; then state=plain; else word+=$char; fi
++                ;;
++            double)
++                case $char in
++                    '"') state=plain ;;
++                    '\')
++                        if (( i + 1 >= ${#input} )); then return 2; fi
++                        next=${input:i+1:1}
++                        case $next in
++                            '"'|'\'|'$'|'`') word+=$next; i=$((i + 1)) ;;
++                            $'\n') i=$((i + 1)) ;;
++                            *) word+=$char ;;
++                        esac
++                        ;;
++                    *) word+=$char ;;
++                esac
++                ;;
++            plain)
++                case $char in
++                    ' '|$'\t'|$'\n')
++                        if $started; then job_args+=("$word"); word=""; started=false; fi
++                        ;;
++                    "'") state=single; started=true ;;
++                    '"') state=double; started=true ;;
++                    '\')
++                        if (( i + 1 >= ${#input} )); then return 2; fi
++                        i=$((i + 1))
++                        if [[ ${input:i:1} != $'\n' ]]; then word+=${input:i:1}; started=true; fi
++                        ;;
++                    *) word+=$char; started=true ;;
++                esac
++                ;;
++        esac
++    done
++    [[ $state == plain ]] || return 2
++    if $started; then job_args+=("$word"); fi
++    return 0
++}
++
++get_job_arg_value() {
++    local long_option=$1 arg
++    local -i i
++
++    for ((i=0; i<${#job_args[@]}; i++)); do
++        arg=${job_args[i]}
++        case $arg in
++            "$long_option")
++                if (( i + 1 < ${#job_args[@]} )); then
++                    printf '%s\n' "${job_args[i + 1]}"
++                    return 0
++                fi
++                ;;
++            "$long_option"=*)
++                printf '%s\n' "${arg#*=}"
++                return 0
++                ;;
++        esac
++    done
++    return 1
++}
++
++has_job_arg() {
++    local option=$1 arg
++
++    for arg in "${job_args[@]}"; do
++        [[ $arg == "$option" ]] && return 0
++    done
++    return 1
++}
++
++derive_lock_name() {
++    local script_name sid task
++
++    script_name=$(basename -- "$_job_script")
++    if [[ $script_name == rman-backup.sh ]]; then
++        sid=$(get_job_arg_value --sid || true)
++        task=$(get_job_arg_value --task || true)
++        if [[ -z $sid || -z $task ]]; then
++            echo "ERROR: rman-backup.sh jobs require --sid=SID and --task=TASK for locking" >&2
++            exit 2
++        fi
++        printf 'rman-backup.%s.%s\n' "$sid" "$task"
++        return 0
++    fi
++    printf '%s\n' "$_job_name"
++}
++
++cleanup() {
++    local status=$?
++    trap - EXIT ERR
++    trap '' INT TERM HUP
++    set +e
++    if [[ -n $_child_pid ]]; then
++        # Async children can inherit ignored SIGINT; TERM also works for them.
++        kill -TERM -- "$_child_pid" 2>/dev/null || true
++        wait "$_child_pid" 2>/dev/null || true
++    fi
++    if $_job_started; then
++        if ! $_silent || [[ $status -ne 0 ]]; then
++            printf '%s finish job=%s status=%s signal=%s\n' \
++                "$(log_prefix)" "$(log_escape "$_job_name")" "$status" "$(log_escape "${_signal:-none}")" >&2 || true
++        fi
++    fi
++    exit "$status"
++}
++
++handle_signal() {
++    _signal=$2
++    exit "$1"
++}
++trap cleanup EXIT
++trap 'printf "ERROR: job-runner line=%s status=%s\n" "$LINENO" "$?" >&2 || true' ERR
++trap 'handle_signal 130 INT' INT
++trap 'handle_signal 143 TERM' TERM
++trap 'handle_signal 129 HUP' HUP
++
+ # Parse command line options.
+ while [[ $# -gt 0 ]]; do
+   case $1 in
+-    -v|--verbose)    _verbose=true;    shift ;;
+-    -n|--job-name)   _job_name="$2";   shift 2 ;;
+-    -j|--job-script) _job_script="$2"; shift 2 ;;
+-    -p|--job-args)   _job_args="$2";   shift 2 ;;
+-    --logs-dir)      _logs_dir="$2";   shift 2 ;;
++    --job-name|--job-script|--job-args|--logs-dir)
++      printf 'ERROR: Use %s=value syntax\n%s\n' "$1" "$USAGE" >&2
++      exit 2
++      ;;
++  esac
++  case $1 in
++    --help)          print_help; exit 0 ;;
++    --silent)        _silent=true;     shift ;;
++    --dry-run)       _dry_run=true;    shift ;;
++    --job-name=*)    _job_name="${1#*=}";   shift ;;
++    --job-script=*)  _job_script="${1#*=}"; shift ;;
++    --job-args=*)    _job_args="${1#*=}";   shift ;;
++    --logs-dir=*)    _logs_dir="${1#*=}";   shift ;;
++    -*)              printf 'ERROR: Unknown option: %s\n%s\n' "$1" "$USAGE" >&2; exit 2 ;;
+     *)               POSITIONAL_ARGS+=("$1"); shift ;;
+   esac
+ done
+ 
+-exec >> "${_logs_dir}/$(basename $0).log" 2>&1
++if [[ -z $_job_name || -z $_job_script || -z $_logs_dir ]]; then
++    printf 'ERROR: --job-name=NAME, --job-script=SCRIPT and --logs-dir=DIR are required\n%s\n' "$USAGE" >&2
++    exit 2
++fi
++if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
++    printf 'ERROR: Unexpected positional argument: %s\n%s\n' "${POSITIONAL_ARGS[0]}" "$USAGE" >&2
++    exit 2
++fi
++if $_dry_run; then
++    _silent=false
++fi
++if ! parse_job_args "$_job_args"; then
++    echo 'ERROR: Unclosed quote or trailing escape in --job-args' >&2
++    exit 2
++fi
++mkdir -p -- "$_logs_dir"
++if ! $_dry_run; then
++    exec >> "${_logs_dir}/$(basename "$0").log" 2>&1
++fi
+ 
+ _work_dir=$(dirname "$0")
+ source "${_work_dir}/job-runner.conf"
+@@ -38,6 +246,19 @@ if [[ ! ${_job_name:-} =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+     echo "ERROR: Invalid or missing job name" >&2
+     exit 1
+ fi
++if [[ ! $_job_script =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ || $_job_script == .* ]]; then
++    echo "ERROR: Invalid job script name" >&2
++    exit 1
++fi
++if [[ ! -f "${_work_dir}/${_job_script}" || ! -x "${_work_dir}/${_job_script}" ]]; then
++    echo "ERROR: Job script is not executable: ${_work_dir}/${_job_script}" >&2
++    exit 1
++fi
++_lock_name=$(derive_lock_name)
++if [[ ! ${_lock_name:-} =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
++    echo "ERROR: Invalid lock name derived from job arguments" >&2
++    exit 1
++fi
+ if ! command -v flock >/dev/null 2>&1; then
+     echo "ERROR: flock is required for job locking" >&2
+     exit 1
+@@ -54,7 +275,7 @@ if [[ $(stat -c '%a' -- "$_lock_dir") != 700 ]]; then
+     exit 1
+ fi
+ 
+-_lock_file="$_lock_dir/${_job_name}.lock"
++_lock_file="$_lock_dir/${_lock_name}.lock"
+ if [[ -L "$_lock_file" || ( -e "$_lock_file" && ( ! -f "$_lock_file" || ! -O "$_lock_file" ) ) ]]; then
+     echo "ERROR: Unsafe lock file: $_lock_file" >&2
+     exit 1
+@@ -67,20 +288,38 @@ if flock -n -E 75 9; then
+ else
+     lock_status=$?
+     if [[ $lock_status -eq 75 ]]; then
+-        echo "$(date +'%FT%T') WARNING: Job is already running: ${_job_name}"
++        log_warn "$(date +'%FT%T') WARNING: Job is already running: ${_lock_name}"
+         exit 0
+     fi
+     echo "ERROR: Cannot acquire job lock (code $lock_status): $_lock_file" >&2
+     exit "$lock_status"
+ fi
+ 
+-# Legacy /tmp PID files are deliberately neither read nor executed.
+-echo -e "$(date +'%FT%T') Start job: ${_job_name}"
+-echo -e "\tscript: ${_job_script}"
+-echo -e "\targuments: ${_job_args}"
+-set +e
+-"${_work_dir}/${_job_script}" ${_job_args}; return_code=$?
+-set -e
+-[[ $return_code -ne 0 ]] && echo "\tReturn code: $return_code"
+-echo "$(date +'%FT%T') End job: ${_job_name}"
++_job_started=true
++if ! $_silent; then
++    printf '%s start job=%s lock=%s script=%s args=%s\n' \
++        "$(log_prefix)" "$(log_escape "$_job_name")" "$(log_escape "$_lock_name")" \
++        "$(log_escape "$_job_script")" "$(log_escape "$_job_args")"
++fi
++if $_silent && [[ $(basename -- "$_job_script") == rman-backup.sh ]] && ! has_job_arg --silent; then
++    job_args+=(--silent)
++fi
++if $_dry_run && [[ $(basename -- "$_job_script") == rman-backup.sh ]] && ! has_job_arg --dry-run; then
++    job_args+=(--dry-run)
++fi
++if $_dry_run; then
++    log_info "DRY RUN: would execute: ${_work_dir}/${_job_script}"
++    for arg_index in "${!job_args[@]}"; do
++        printf 'DRY RUN: argument[%s]=%q\n' "$arg_index" "${job_args[arg_index]}"
++    done
++    if [[ $(basename -- "$_job_script") != rman-backup.sh ]]; then
++        exit 0
++    fi
++fi
++"${_work_dir}/${_job_script}" "${job_args[@]}" &
++_child_pid=$!
++if wait "$_child_pid"; then return_code=0; else return_code=$?; fi
++_child_pid=""
++[[ $return_code -ne 0 ]] && printf '%s child_exit job=%s status=%s\n' \
++    "$(log_prefix)" "$(log_escape "$_job_name")" "$return_code"
+ exit "$return_code"
+diff --git "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.conf" b/./rman-backup.conf
+index d89a8d2..99c49e3 100644
+--- "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.conf"
++++ b/./rman-backup.conf
+@@ -1,5 +1,6 @@
+ # --
+-# rman-backup.conf - Файл конфигурации скрипта rman-backup.sh
++# rman-backup.conf - common RMAN backup configuration.
++# Per-database files may override variables after this file is sourced.
+ # --
+ # $Id: rman-backup.conf leonid.malashev@gmail.com $
+ #-------------------------------------------------------------------------------
+@@ -8,119 +9,155 @@ export NLS_LANG="AMERICAN_AMERICA.UTF8"
+ export NLS_DATE_FORMAT="YYYY-MM-DD HH24:MI:SS"
+ #export NLS_TIME_FORMAT="HH24:MI:SSXFF"
+ 
+-AL_FILESPERSET=5
+-DB_FILESPERSET=1
+-DB_SECTION_SIZE=8G
++AL_FILESPERSET=${AL_FILESPERSET:-5}
++DB_FILESPERSET=${DB_FILESPERSET:-1}
++DB_SECTION_SIZE=${DB_SECTION_SIZE:-8G}
++
++RMAN_AFTER_CONNECT=${RMAN_AFTER_CONNECT:-}
++RMAN_AFTER_CONNECT_DATABASE_I0=${RMAN_AFTER_CONNECT_DATABASE_I0:-$RMAN_AFTER_CONNECT}
++RMAN_AFTER_CONNECT_DATABASE_I1=${RMAN_AFTER_CONNECT_DATABASE_I1:-$RMAN_AFTER_CONNECT}
++RMAN_AFTER_CONNECT_ARCHIVELOG=${RMAN_AFTER_CONNECT_ARCHIVELOG:-$RMAN_AFTER_CONNECT}
++RMAN_AFTER_CONNECT_RESTORE_VALIDATE=${RMAN_AFTER_CONNECT_RESTORE_VALIDATE:-$RMAN_AFTER_CONNECT}
++
++RMAN_CROSSCHECK_BACKUP_LINE=${RMAN_CROSSCHECK_BACKUP_LINE:-"  CROSSCHECK BACKUP;"}
++RMAN_CROSSCHECK_ARCHIVELOG_LINE=${RMAN_CROSSCHECK_ARCHIVELOG_LINE:-"  CROSSCHECK ARCHIVELOG ALL;"}
++RMAN_DELETE_EXPIRED_BACKUP_LINE=${RMAN_DELETE_EXPIRED_BACKUP_LINE:-"  DELETE NOPROMPT EXPIRED BACKUP;"}
++RMAN_DELETE_EXPIRED_ARCHIVELOG_LINE=${RMAN_DELETE_EXPIRED_ARCHIVELOG_LINE:-"  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;"}
++RMAN_DELETE_OBSOLETE_LINE=${RMAN_DELETE_OBSOLETE_LINE:-"  DELETE NOPROMPT OBSOLETE;"}
++RMAN_ARCHIVELOG_DELETE_LINE=${RMAN_ARCHIVELOG_DELETE_LINE:-"    DELETE INPUT;"}
+ 
+ #-------------------------------------------------------------------------------
+-function create_rman_backup_database_i0_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
++function write_rman_header {
++    local arg_backup_tag=$1
++    local arg_after_connect=${2:-}
++
++    cat << EOF
+ CONNECT TARGET /
++EOF
++    if [[ -n $arg_after_connect ]]; then
++        printf '%s\n' "$arg_after_connect"
++    fi
++    cat << EOF
+ RUN {
+   SET COMMAND ID TO '$arg_backup_tag';
+-  CROSSCHECK BACKUP;
+-  CROSSCHECK ARCHIVELOG ALL;
+-  DELETE NOPROMPT EXPIRED BACKUP;
+-  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
+-  BACKUP AS COMPRESSED BACKUPSET INCREMENTAL LEVEL = 0
+-    FILESPERSET = ${DB_FILESPERSET}
+-    SECTION SIZE = ${DB_SECTION_SIZE}
+-    TAG '$arg_backup_tag'
+-    DATABASE
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_${arg_job_name}_%T_%U';
+-  SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+-  BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL
+-    FILESPERSET = ${AL_FILESPERSET}
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
+-    DELETE INPUT;
+-  DELETE NOPROMPT OBSOLETE;
+-  BACKUP CURRENT CONTROLFILE
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_cf_%T_%U';
+-  BACKUP SPFILE
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_spf_%T_%U';
++EOF
++}
++
++function write_rman_footer {
++    cat << EOF
+ }
+ EXIT;
+ EOF
+ }
+ 
+-function create_rman_backup_database_i1_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
+-  CROSSCHECK BACKUP;
+-  CROSSCHECK ARCHIVELOG ALL;
+-  DELETE NOPROMPT EXPIRED BACKUP;
+-  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
+-  BACKUP AS COMPRESSED BACKUPSET INCREMENTAL LEVEL = 1
+-    CUMULATIVE
+-    FILESPERSET = ${DB_FILESPERSET}
++function write_rman_crosscheck_all {
++    printf '%s\n' \
++        "$RMAN_CROSSCHECK_BACKUP_LINE" \
++        "$RMAN_CROSSCHECK_ARCHIVELOG_LINE" \
++        "$RMAN_DELETE_EXPIRED_BACKUP_LINE" \
++        "$RMAN_DELETE_EXPIRED_ARCHIVELOG_LINE"
++}
++
++function write_rman_crosscheck_archivelog {
++    printf '%s\n' \
++        "$RMAN_CROSSCHECK_ARCHIVELOG_LINE" \
++        "$RMAN_DELETE_EXPIRED_ARCHIVELOG_LINE"
++}
++
++function write_rman_database_backup {
++    local arg_backup_tag=$1
++    local arg_job_name=$2
++    local arg_level=$3
++    local arg_cumulative=${4:-}
++
++    cat << EOF
++  BACKUP AS COMPRESSED BACKUPSET INCREMENTAL LEVEL = ${arg_level}
++${arg_cumulative}    FILESPERSET = ${DB_FILESPERSET}
+     SECTION SIZE = ${DB_SECTION_SIZE}
+     TAG '$arg_backup_tag'
+     DATABASE
+     FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_${arg_job_name}_%T_%U';
++EOF
++}
++
++function write_rman_archivelog_backup {
++    local arg_backup_tag=$1
++    local arg_not_backed_up=${2:-}
++
++    cat << EOF
+   SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+   BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL
+     FILESPERSET = ${AL_FILESPERSET}
+     TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
+-    DELETE INPUT;
+-  DELETE NOPROMPT OBSOLETE;
++${arg_not_backed_up}    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
++${RMAN_ARCHIVELOG_DELETE_LINE}
++EOF
++}
++
++function write_rman_obsolete_and_metadata {
++    local arg_backup_tag=$1
++
++    cat << EOF
++${RMAN_DELETE_OBSOLETE_LINE}
+   BACKUP CURRENT CONTROLFILE
+     TAG '$arg_backup_tag'
+     FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_cf_%T_%U';
+   BACKUP SPFILE
+     TAG '$arg_backup_tag'
+     FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_spf_%T_%U';
+-}
+-EXIT;
+ EOF
+ }
+ 
+-function create_rman_backup_archivelog_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
+-  CROSSCHECK ARCHIVELOG ALL;
+-  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
+-  SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+-  BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL
+-    FILESPERSET = ${AL_FILESPERSET}
+-    TAG '$arg_backup_tag'
+-    NOT BACKED UP 1 TIMES
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
+-    DELETE INPUT;
++function create_rman_backup_database_script {
++    local arg_file_name=$1
++    local arg_backup_tag=$2
++    local arg_job_name=$3
++    local arg_level=$4
++    local arg_cumulative=${5:-}
++    local arg_after_connect=${6:-}
++
++    {
++        write_rman_header "$arg_backup_tag" "$arg_after_connect"
++        write_rman_crosscheck_all
++        write_rman_database_backup "$arg_backup_tag" "$arg_job_name" "$arg_level" "$arg_cumulative"
++        write_rman_archivelog_backup "$arg_backup_tag"
++        write_rman_obsolete_and_metadata "$arg_backup_tag"
++        write_rman_footer
++    } > "$arg_file_name"
+ }
+-EXIT;
+-EOF
++
++function create_rman_backup_database_i0_script {
++    create_rman_backup_database_script "$1" "$2" "$3" 0 "" "$RMAN_AFTER_CONNECT_DATABASE_I0"
++}
++
++function create_rman_backup_database_i1_script {
++    create_rman_backup_database_script "$1" "$2" "$3" 1 $'    CUMULATIVE\n' "$RMAN_AFTER_CONNECT_DATABASE_I1"
++}
++
++function create_rman_backup_archivelog_script {
++    local arg_file_name=$1
++    local arg_backup_tag=$2
++
++    {
++        write_rman_header "$arg_backup_tag" "$RMAN_AFTER_CONNECT_ARCHIVELOG"
++        write_rman_crosscheck_archivelog
++        write_rman_archivelog_backup "$arg_backup_tag" $'    NOT BACKED UP 1 TIMES\n'
++        write_rman_footer
++    } > "$arg_file_name"
+ }
+ 
+ function create_rman_restore_database_validate_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
++    local arg_file_name=$1
++    local arg_backup_tag=$2
++
++    {
++        write_rman_header "$arg_backup_tag" "$RMAN_AFTER_CONNECT_RESTORE_VALIDATE"
++        cat << EOF
+   RESTORE DATABASE VALIDATE;
+   RESTORE SPFILE FROM AUTOBACKUP VALIDATE;
+   RESTORE CONTROLFILE FROM AUTOBACKUP VALIDATE;
+   #Error RESTORE ARCHIVELOG ALL VALIDATE;
+-}
+-EXIT;
+ EOF
++        write_rman_footer
++    } > "$arg_file_name"
+ }
+diff --git "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.orcl.conf" b/./rman-backup.orcl.conf
+index bae7b36..1972168 100644
+--- "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.orcl.conf"
++++ b/./rman-backup.orcl.conf
+@@ -1,5 +1,6 @@
+ # --
+-# rman-backup.conf - Файл конфигурации скрипта rman-backup.sh
++# rman-backup.orcl.conf - ORCL-specific RMAN backup overrides.
++# Common RMAN templates live in rman-backup.conf.
+ # --
+ # $Id: rman-backup.conf leonid.malashev@gmail.com $
+ #-------------------------------------------------------------------------------
+@@ -8,116 +9,5 @@ AL_FILESPERSET=5
+ DB_FILESPERSET=1
+ DB_SECTION_SIZE=8G
+ 
+-#-------------------------------------------------------------------------------
+-function create_rman_backup_database_i0_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-SHOW ALL;
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
+-  CROSSCHECK BACKUP;
+-  CROSSCHECK ARCHIVELOG ALL;
+-  DELETE NOPROMPT EXPIRED BACKUP;
+-  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
+-  BACKUP AS COMPRESSED BACKUPSET INCREMENTAL LEVEL = 0
+-    FILESPERSET = ${DB_FILESPERSET}
+-    SECTION SIZE = ${DB_SECTION_SIZE}
+-    TAG '$arg_backup_tag'
+-    DATABASE
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_${arg_job_name}_%T_%U';
+-  SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+-  BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL
+-    FILESPERSET = ${AL_FILESPERSET}
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
+-    DELETE INPUT;
+-  DELETE NOPROMPT OBSOLETE;
+-  BACKUP CURRENT CONTROLFILE
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_cf_%T_%U';
+-  BACKUP SPFILE
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_spf_%T_%U';
+-}
+-EXIT;
+-EOF
+-}
+-
+-function create_rman_backup_database_i1_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
+-  CROSSCHECK BACKUP;
+-  CROSSCHECK ARCHIVELOG ALL;
+-  DELETE NOPROMPT EXPIRED BACKUP;
+-  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
+-  BACKUP AS COMPRESSED BACKUPSET INCREMENTAL LEVEL = 1
+-    CUMULATIVE
+-    FILESPERSET = ${DB_FILESPERSET}
+-    SECTION SIZE = ${DB_SECTION_SIZE}
+-    TAG '$arg_backup_tag'
+-    DATABASE
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_${arg_job_name}_%T_%U';
+-  SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+-  BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL
+-    FILESPERSET = ${AL_FILESPERSET}
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
+-    DELETE INPUT;
+-  DELETE NOPROMPT OBSOLETE;
+-  BACKUP CURRENT CONTROLFILE
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_cf_%T_%U';
+-  BACKUP SPFILE
+-    TAG '$arg_backup_tag'
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_spf_%T_%U';
+-}
+-EXIT;
+-EOF
+-}
+-
+-function create_rman_backup_archivelog_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
+-  CROSSCHECK ARCHIVELOG ALL;
+-  DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;
+-  SQL 'ALTER SYSTEM ARCHIVE LOG CURRENT';
+-  BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL
+-    FILESPERSET = ${AL_FILESPERSET}
+-    TAG '$arg_backup_tag'
+-    NOT BACKED UP 1 TIMES
+-    FORMAT '${_base_backup_dir}/${_oracle_sid}/%d_al_%T_%U'
+-    DELETE INPUT;
+-}
+-EXIT;
+-EOF
+-}
+-
+-function create_rman_restore_database_validate_script {
+-    arg_file_name=$1
+-    arg_backup_tag=$2
+-    arg_job_name=$3
+-    cat > $arg_file_name << EOF
+-CONNECT TARGET /
+-RUN {
+-  SET COMMAND ID TO '$arg_backup_tag';
+-  RESTORE DATABASE VALIDATE;
+-  RESTORE SPFILE FROM AUTOBACKUP VALIDATE;
+-  RESTORE CONTROLFILE FROM AUTOBACKUP VALIDATE;
+-  #Error RESTORE ARCHIVELOG ALL VALIDATE;
+-}
+-EXIT;
+-EOF
+-}
++# Keep ORCL's existing extra inventory output for level-0 database backups.
++RMAN_AFTER_CONNECT_DATABASE_I0="SHOW ALL;"
+diff --git "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.sh" b/./rman-backup.sh
+index b810808..3edc0de 100644
+--- "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.sh"
++++ b/./rman-backup.sh
+@@ -1,137 +1,274 @@
+ #!/bin/bash
+-# --
+-# rman-backup.sh - Скрипт запуска резервного копирования (Oracle RMAN)
+-# --
+-# $Id: rman-backup.sh leonid.malashev@gmail.com $
+-#-------------------------------------------------------------------------------
+-#set -x
+-set -eou pipefail
+-#-------------------------------------------------------------------------------
++# rman-backup.sh - Oracle RMAN backup launcher.
++set -Eeuo pipefail
++
++_verbose=false
++_silent=false
++_dry_run=false
++_oracle_sid=""
++_task=""
++_base_backup_dir=""
++_logs_dir=""
++_temp_dir=""
++_rman_scr=""
++_rman_log=""
++_rman_out=""
++_child_pid=""
++backup_tag=""
++_signal=""
++_error_line=""
++_phase=startup
++POSITIONAL_ARGS=()
++
++log_info() {
++    $_silent || printf '%s\n' "$*"
++}
++
++log_escape() {
++    local value=${1//\\/\\\\}
++    value=${value//$'\n'/\\n}
++    value=${value//$'\t'/\\t}
++    value=${value// /\\ }
++    printf '%s' "$value"
++}
++
++log_stamp() {
++    date '+%b %e %T'
++}
++
++log_prefix() {
++    printf '%s %s %s[%s]:' "$(log_stamp)" "$(hostname -s 2>/dev/null || hostname)" "$(basename "$0")" "$$"
++}
++
++print_help() {
++    cat << EOF
++$USAGE
++
++Options:
++      --sid=SID             Oracle SID to back up.
++      --task=TASK           One of: database-i0, database-i1, archivelog, restore_validate.
++      --base-backup-dir=DIR Base directory for backup pieces.
++      --logs-dir=DIR        Directory for wrapper logs and diagnostics.
++      --dry-run             Generate and show the RMAN script and command, then exit.
++                            Does not run RMAN, delete logs, or remove temp files.
++      --silent              Suppress routine success messages; keep errors.
++      --help                Show this help.
++EOF
++}
++
+ sanitize() {
+-  local input="$1"
+-  local sanitized
+-  sanitized=$(echo "$input" | sed 's#[\\/:\*\?"<>|]##g')
+-  sanitized=$(echo "$sanitized" | tr ' ' '_')
+-  sanitized=$(echo "$sanitized" | sed 's/^[[:space:]\.]*//; s/[[:space:]\.]*$//')
+-  sanitized="${sanitized:0:255}"
+-  echo "$sanitized"
++    local sanitized
++    sanitized=$(printf '%s' "$1" | sed 's#[\\/:\*\?"<>|]##g' | tr ' ' '_' | sed 's/^[[:space:]\.]*//; s/[[:space:]\.]*$//')
++    printf '%s\n' "${sanitized:0:255}"
+ }
+ 
+-function cleanup {
+-    [ -e ${_rman_scr} ] && rm ${_rman_scr}
+-    [ -e ${_rman_log} ] && mv ${_rman_log} "$LOGS_DIR/$(sanitize ${backup_tag}).log"
+-    [ -e ${_rman_out} ] && rm ${_rman_out}
+-    exit $1
++record_error() {
++    local status=$1
++    _error_line=$2
++    printf 'ERROR: phase=%s line=%s status=%s\n' "$_phase" "$_error_line" "$status" >&2 || true
++    return "$status"
+ }
+-trap cleanup INT TERM KILL HUP
+-#
+-#-------------------------------------------------------------------------------
+-#
+-USAGE="Usage: $(basename $0) -s|--sid [ -t|--task [ database-i0 | database-i1 | archivelog | restore_validate ] ]"
+-# Parse command line options.
++
++cleanup() {
++    local status=$? cleanup_status=0 diagnostics_dir="" file
++    trap - EXIT ERR
++    trap '' INT TERM HUP
++    set +e
++    # Reap the child before copying/deleting files it may still be writing.
++    # Also covers an unexpected shell error after the child has been launched.
++    if [[ -n $_child_pid ]]; then
++        kill -TERM -- "$_child_pid" 2>/dev/null || true
++        wait "$_child_pid" 2>/dev/null || true
++        _child_pid=""
++    fi
++    if [[ -n $_task && ( $status -ne 0 || ( $_dry_run == false && $_silent == false ) ) ]]; then
++        printf '%s finish sid=%s task=%s status=%s signal=%s phase=%s\n' \
++            "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
++            "$status" "$(log_escape "${_signal:-none}")" "$(log_escape "$_phase")" >&2 || true
++    fi
++    if [[ -n $_temp_dir && -d $_temp_dir ]]; then
++        if $_dry_run; then
++            printf 'DRY RUN: temporary files retained: %s\n' "$_temp_dir" >&2 || true
++            exit "$status"
++        fi
++        # Keep the established per-job log path for existing consumers.
++        if [[ -f $_rman_log ]]; then
++            cp -- "$_rman_log" "$_logs_dir/$(sanitize "$backup_tag").log" || cleanup_status=$?
++        fi
++        if [[ $status -ne 0 && $cleanup_status -eq 0 ]]; then
++            # Unique directories prevent concurrent runs from overwriting diagnostics.
++            diagnostics_dir=$(mktemp -d "$_logs_dir/rman-$(sanitize "$backup_tag").XXXXXXXX") || cleanup_status=$?
++            if [[ $cleanup_status -eq 0 ]]; then
++                for file in "$_rman_scr" "$_rman_log" "$_rman_out"; do
++                    if [[ -f $file ]]; then
++                        cp -- "$file" "$diagnostics_dir/" || cleanup_status=$?
++                    fi
++                done
++                printf 'task=%s\nsid=%s\nexit_status=%s\nsignal=%s\nphase=%s\nerror_line=%s\n' \
++                    "$_task" "$_oracle_sid" "$status" "${_signal:-none}" "$_phase" "$_error_line" \
++                    > "$diagnostics_dir/status.txt" || cleanup_status=$?
++            fi
++        fi
++        if [[ $cleanup_status -eq 0 ]]; then
++            if [[ -n $diagnostics_dir ]]; then
++                $_silent || printf '%s diagnostics_saved sid=%s task=%s path=%s\n' \
++                    "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
++                    "$(log_escape "$diagnostics_dir")" >&2 || true
++            fi
++            rm -f -- "$_rman_scr" "$_rman_log" "$_rman_out" || cleanup_status=$?
++            rmdir -- "$_temp_dir" || cleanup_status=$?
++        fi
++    fi
++    if [[ $cleanup_status -ne 0 ]]; then
++        printf 'ERROR: Diagnostics/cleanup failed (code %s); retained temporary files: %s; archive: %s\n' \
++            "$cleanup_status" "$_temp_dir" "$diagnostics_dir" >&2 || true
++        if [[ $status -eq 0 ]]; then status=$cleanup_status; fi
++    fi
++    exit "$status"
++}
++
++handle_signal() {
++    _signal=$2
++    exit "$1"
++}
++trap cleanup EXIT
++trap 'record_error $? $LINENO' ERR
++trap 'handle_signal 130 INT' INT
++trap 'handle_signal 143 TERM' TERM
++trap 'handle_signal 129 HUP' HUP
++
++USAGE="Usage: $(basename "$0") --sid=SID --task=[ database-i0 | database-i1 | archivelog | restore_validate ] --base-backup-dir=DIR --logs-dir=DIR [--silent] [--dry-run]"
+ while [[ $# -gt 0 ]]; do
+-  case $1 in
+-    -v|--verbose)      _verbose=true; shift ;;
+-    -s|--sid)          _oracle_sid="$2"; shift 2 ;;
+-    -t|--task)         _task="$2"; shift 2 ;;
+-    --base-backup-dir) _base_backup_dir="$2"; shift 2 ;;
+-    --logs-dir)        _logs_dir="$2"; shift 2 ;;
+-    -*)                echo "Unknown option: $1. $USAGE"; exit 1 ;;
+-    *)                 POSITIONAL_ARGS+=("$1"); shift ;;
+-  esac
++    case $1 in
++        --sid|--task|--base-backup-dir|--logs-dir)
++            printf 'ERROR: Use %s=value syntax\n%s\n' "$1" "$USAGE" >&2
++            exit 2
++            ;;
++    esac
++    case $1 in
++        --help)            print_help; exit 0 ;;
++        --silent)          _silent=true; shift ;;
++        --dry-run)         _dry_run=true; shift ;;
++        --sid=*)           _oracle_sid=${1#*=}; shift ;;
++        --task=*)          _task=${1#*=}; shift ;;
++        --base-backup-dir=*) _base_backup_dir=${1#*=}; shift ;;
++        --logs-dir=*)      _logs_dir=${1#*=}; shift ;;
++        -*) printf 'ERROR: Unknown option: %s\n%s\n' "$1" "$USAGE" >&2; exit 2 ;;
++        *) POSITIONAL_ARGS+=("$1"); shift ;;
++    esac
+ done
+ 
+-exec >> "${_logs_dir}/$(basename $0).log" 2>&1
++if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
++    printf 'ERROR: Unexpected positional argument: %s\n%s\n' "${POSITIONAL_ARGS[0]}" "$USAGE" >&2
++    exit 2
++fi
++if $_dry_run; then
++    _silent=false
++fi
+ 
+-if [[ -e $(dirname $0)/rman-backup.conf ]]; then
+-  echo "Backup Config: $(dirname $0)/rman-backup.conf"
+-  source $(dirname $0)/rman-backup.conf
++if [[ -z $_oracle_sid || -z $_task || -z $_base_backup_dir || -z $_logs_dir ]]; then
++    printf 'ERROR: --sid=SID, --task=TASK, --base-backup-dir=DIR and --logs-dir=DIR are required\n%s\n' "$USAGE" >&2
++    exit 2
++fi
++case $_task in
++    database-i0) job_name=i0 ;;
++    database-i1) job_name=i1 ;;
++    archivelog) job_name=al ;;
++    restore_validate) job_name=rv ;;
++    *) printf 'ERROR: Unknown task: %s\n%s\n' "$_task" "$USAGE" >&2; exit 2 ;;
++esac
++if [[ ! $_oracle_sid =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
++    printf 'ERROR: Invalid --sid: %s\n' "$_oracle_sid" >&2
++    exit 2
+ fi
+-if [[ -e $(dirname $0)/rman-backup.${_oracle_sid}.conf ]]; then
+-  echo "SID Backup Config: $(dirname $0)/rman-backup.${_oracle_sid}.conf"
+-  source $(dirname $0)/rman-backup.${_oracle_sid}.conf
++if [[ -e $_base_backup_dir && ! -d $_base_backup_dir ]]; then
++    printf 'ERROR: --base-backup-dir is not a directory: %s\n' "$_base_backup_dir" >&2
++    exit 2
++fi
++if [[ -e $_logs_dir && ! -d $_logs_dir ]]; then
++    printf 'ERROR: --logs-dir is not a directory: %s\n' "$_logs_dir" >&2
++    exit 2
+ fi
+ 
++mkdir -p -- "$_logs_dir"
++if ! $_dry_run; then
++    exec >> "${_logs_dir}/$(basename "$0").log" 2>&1
++fi
++_work_dir=$(dirname "$0")
++_backup_config=""
++_sid_config=""
++if [[ -f $_work_dir/rman-backup.conf ]]; then
++    _backup_config="$_work_dir/rman-backup.conf"
++    source "$_work_dir/rman-backup.conf"
++fi
++if [[ -f $_work_dir/rman-backup.${_oracle_sid}.conf ]]; then
++    _sid_config="$_work_dir/rman-backup.${_oracle_sid}.conf"
++    source "$_work_dir/rman-backup.${_oracle_sid}.conf"
++fi
+ 
+-# oracle sid
+-if [[ -n "${_oracle_sid}" ]]; then
+-  echo "ORACLE_SID: ${_oracle_sid}"
+-  # set environments
+-  ORACLE_SID="${_oracle_sid}"
+-  ORAENV_ASK=NO
+-  source oraenv -s
+-else
+-  echo "Undefined Oracle SID"
+-  exit 1
++export ORACLE_SID="$_oracle_sid" ORAENV_ASK=NO
++# Oracle's environment script may inspect unset variables.
++set +u
++source oraenv -s
++set -u
++if [[ -z ${ORACLE_HOME:-} ]]; then
++    echo 'ERROR: oraenv did not set ORACLE_HOME' >&2
++    exit 1
+ fi
+-# base backup dir
+-if [[ -n ${_base_backup_dir} ]]; then
+-  echo "Base Backups Directory: ${_base_backup_dir}"
+-  [[ ! -d "${_base_backup_dir}/${_oracle_sid}" ]] && mkdir -p "${_base_backup_dir}/${_oracle_sid}"
++mkdir -p -- "${_base_backup_dir}/${_oracle_sid}"
++LOGS_DIR=$_logs_dir
++if ! $_silent; then
++    printf '%s start sid=%s task=%s base_backup_dir=%s logs_dir=%s config=%s sid_config=%s\n' \
++        "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
++        "$(log_escape "$_base_backup_dir")" "$(log_escape "$LOGS_DIR")" \
++        "$(log_escape "$_backup_config")" "$(log_escape "$_sid_config")"
+ fi
+-# logs dir
+-if [[ -n ${_logs_dir} ]]; then
+-  echo "Logs Directory: ${_logs_dir}"
+-  LOGS_DIR=${_logs_dir}
+-  [[ ! -d ${_logs_dir} ]] && mkdir -p ${_logs_dir}
++
++job_time=$(date +'%FT%T')
++backup_tag="${job_name}_${job_time}"
++_temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/rman.XXXXXXXX")
++_rman_scr="$_temp_dir/rman.scr"
++_rman_log="$_temp_dir/rman.log"
++_rman_out="$_temp_dir/rman.out"
++_phase=generate
++case $_task in
++    database-i0) create_rman_backup_database_i0_script "$_rman_scr" "$backup_tag" "$job_name" ;;
++    database-i1) create_rman_backup_database_i1_script "$_rman_scr" "$backup_tag" "$job_name" ;;
++    archivelog) create_rman_backup_archivelog_script "$_rman_scr" "$backup_tag" "$job_name" ;;
++    restore_validate) create_rman_restore_database_validate_script "$_rman_scr" "$backup_tag" "$job_name" ;;
++esac
++if [[ ! -f $_rman_scr ]]; then
++    printf 'ERROR: Cannot open RMAN script file: %s\n' "$_rman_scr" >&2
++    exit 1
+ fi
+-# task
+-if [[ -n "${_task}" ]]; then
+-  echo "Task: ${_task}"
+-  job_time=$(date +'%FT%T') #%H:%M:%S
+-  _rman_scr="/tmp/rman.$$.scr"
+-  _rman_log="/tmp/rman.$$.log"
+-  _rman_out="/tmp/rman.$$.out"
+-  case ${_task} in
+-    database-i0)
+-      job_name="i0"
+-      backup_tag="${job_name}_${job_time}"
+-      create_rman_backup_database_i0_script ${_rman_scr} ${backup_tag} ${job_name}
+-      ;;
+-    database-i1)
+-      job_name="i1"
+-      backup_tag="${job_name}_${job_time}"
+-      create_rman_backup_database_i1_script ${_rman_scr} ${backup_tag} ${job_name}
+-      ;;
+-    archivelog)
+-      job_name="al"
+-      backup_tag="${job_name}_${job_time}"
+-      create_rman_backup_archivelog_script ${_rman_scr} ${backup_tag} ${job_name}
+-      ;;
+-    restore_validate)
+-      job_name="rv"
+-      backup_tag="${job_name}_${job_time}"
+-      create_rman_restore_database_validate_script ${_rman_scr} ${backup_tag} ${job_name}
+-      ;;
+-    * )
+-      # getopts issues an error message
+-      echo $USAGE >&2
+-      exit 1
+-      ;;
+-  esac
+-else
+-  echo "Undefined Task" && exit 1
++
++if $_dry_run; then
++    log_info "DRY RUN: RMAN script: $_rman_scr"
++    log_info "DRY RUN: RMAN log: $_rman_log"
++    log_info "DRY RUN: RMAN output: $_rman_out"
++    log_info "DRY RUN: would execute:"
++    log_info "  $ORACLE_HOME/bin/rman nocatalog log $_rman_log @$_rman_scr"
++    log_info "DRY RUN: generated RMAN script follows:"
++    cat -- "$_rman_scr"
++    exit 0
+ fi
+ 
+-if [[ -e ${_rman_scr} ]]; then
+-    echo "$(date +'%FT%T') Begin RMAN Job: \"${_task}\""
+-    set +e
+-    $ORACLE_HOME/bin/rman nocatalog log ${_rman_log} @${_rman_scr} 2>&1 > ${_rman_out}; _result_code=$? 
+-    set -e
+-    echo "$(date +'%FT%T') End RMAN Job: \"${_task}\""
+-    if [[ ${_result_code} -ne 0 ]]; then
+-        echo -e "ERROR: Debug informatio:"
+-        echo -e "ERROR: \t\Return code: ${_result_code}"
+-        echo -e "ERROR: \t\List file ${_rman_scr}"; cat ${_rman_scr}
+-        echo -e "ERROR: \t\List file ${_rman_log}"; cat ${_rman_log}
+-    else
+-        #echo "$(date +'%FT%T') NOTE: Remove old (32 days) logs ..."
+-        find $LOGS_DIR -name '*.log' -mtime +32 -print -delete
+-    fi
++_phase=rman
++"$ORACLE_HOME/bin/rman" nocatalog log "$_rman_log" "@$_rman_scr" > "$_rman_out" 2>&1 &
++_child_pid=$!
++if wait "$_child_pid"; then _result_code=0; else _result_code=$?; fi
++_child_pid=""
++if [[ $_result_code -ne 0 ]]; then
++    printf '%s rman_error sid=%s task=%s status=%s\n' \
++        "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" "$_result_code"
++    for diagnostic in "$_rman_scr" "$_rman_log" "$_rman_out"; do
++        if [[ -f $diagnostic ]]; then
++            printf 'ERROR: Contents of %s\n' "$diagnostic"
++            cat -- "$diagnostic" || true
++        fi
++    done
+ else
+-    echo -e "$(date +'%FT%T') ERROR: \t\tCannot open RMAN script file: ${_rman_scr}"
+-    cleanup 1
++    _phase=log-retention
++    find "$LOGS_DIR" -name '*.log' -mtime +32 -print -delete
+ fi
+-
+-cleanup ${_result_code}
+-exit
++exit "$_result_code"
+diff --git a/./tests/bash-errors.sh b/./tests/bash-errors.sh
+new file mode 100644
+index 0000000..2533084
+--- /dev/null
++++ b/./tests/bash-errors.sh
+@@ -0,0 +1,309 @@
++#!/bin/bash
++# Integration tests with a fake oraenv/RMAN. No Oracle database is accessed.
++set -euo pipefail
++project_dir=$(cd -- "${1:-$(dirname "$0")/..}" && pwd)
++test_dir=$(mktemp -d /tmp/oracle-bash-test.XXXXXXXX)
++real_home=$HOME
++export HOME="$test_dir/home"
++mkdir -p "$HOME"
++active_pid=""
++job="bash-errors-$(id -u)-$$"
++cleanup() {
++    if [[ -n $active_pid ]]; then
++        kill -TERM "$active_pid" 2>/dev/null || true
++        wait "$active_pid" 2>/dev/null || true
++    fi
++    export HOME=$real_home
++    if [[ -d $test_dir && ! -L $test_dir && $test_dir == /tmp/oracle-bash-test.* ]]; then
++        rm -rf -- "$test_dir"
++    fi
++}
++trap cleanup EXIT
++scripts="$test_dir/scripts with spaces"
++mkdir -p "$scripts" "$test_dir/bin" "$test_dir/oracle home/bin" "$test_dir/temp files"
++cp -- "$project_dir/job-runner.sh" "$project_dir/rman-backup.sh" \
++    "$project_dir/rman-backup.conf" "$project_dir/rman-backup.orcl.conf" "$scripts/"
++printf '# Test configuration\n' > "$scripts/job-runner.conf"
++cat > "$test_dir/bin/oraenv" <<'ORAENV'
++# Deliberately inspect an unset variable, like third-party environment scripts.
++unused=$ORACLE_ENV_UNSET_TEST
++export ORACLE_HOME="$MOCK_ORACLE_HOME"
++ORAENV
++cat > "$test_dir/oracle home/bin/rman" <<'RMAN'
++#!/bin/bash
++set -euo pipefail
++[[ $# -eq 4 && $1 == nocatalog && $2 == log && $4 == @* ]]
++cp -- "${4#@}" "$TEST_ROOT/generated.rman"
++if [[ $TEST_MODE != no-log ]]; then printf 'RMAN test log\n' > "$3"; fi
++printf 'mock stdout\n'
++printf 'mock stderr\n' >&2
++case $TEST_MODE in
++    success) exit 0 ;;
++    fail) exit 17 ;;
++    no-log) exit 23 ;;
++    hold)
++        trap 'sleep 0.2; touch "$TEST_ROOT/stopped"; exit 143' TERM
++        echo "$$" > "$TEST_ROOT/rman.pid"
++        while :; do sleep 0.05; done
++        ;;
++esac
++RMAN
++cat > "$scripts/args.sh" <<'ARGS_SCRIPT'
++#!/bin/bash
++printf '%s\0' "$@" > "$TEST_ROOT/args.bin"
++ARGS_SCRIPT
++chmod 700 "$scripts/rman-backup.sh" "$scripts/args.sh" "$test_dir/oracle home/bin/rman"
++export TEST_ROOT="$test_dir" MOCK_ORACLE_HOME="$test_dir/oracle home" TEST_MODE=success
++export PATH="$test_dir/bin:$PATH" TMPDIR="$test_dir/temp files"
++unset ORACLE_ENV_UNSET_TEST
++
++expect_status() {
++    local expected=$1 status=0
++    shift
++    "$@" > "$test_dir/console" 2>&1 || status=$?
++    if [[ $status -ne $expected ]]; then
++        cat "$test_dir/console" >&2
++        printf 'FAIL: expected %s, got %s\n' "$expected" "$status" >&2
++        exit 1
++    fi
++}
++expect_ok() {
++    "$@" > "$test_dir/console" 2>&1
++}
++assert_temp_empty() {
++    [[ -z $(find "$TMPDIR" -mindepth 1 -print -quit) ]]
++}
++wait_for_rman() {
++    for ((attempt=0; attempt<200; attempt++)); do
++        [[ ! -f $test_dir/rman.pid ]] || return 0
++        sleep 0.05
++    done
++    echo 'FAIL: RMAN mock did not start' >&2
++    exit 1
++}
++assert_diagnostics() {
++    local logs=$1 status=$2 signal=${3:-none} directory
++    saved_diagnostics=""
++    for directory in "$logs"/rman-*; do
++        [[ -f $directory/status.txt ]] || continue
++        if grep -qx "exit_status=$status" "$directory/status.txt" && \
++           grep -qx "signal=$signal" "$directory/status.txt"; then
++            saved_diagnostics=$directory
++        fi
++    done
++    [[ -n $saved_diagnostics ]]
++}
++assert_no_diagnostics() {
++    local logs=$1
++    [[ -z $(find "$logs" -mindepth 1 -maxdepth 1 -type d -name 'rman-*' -print -quit 2>/dev/null) ]]
++}
++run_rman() {
++    bash "$scripts/rman-backup.sh" --sid=orcl --task="$1" \
++        --logs-dir="$test_dir/logs $1" --base-backup-dir="$test_dir/backup files"
++}
++
++for option in --sid --task --base-backup-dir --logs-dir; do
++    expect_status 2 bash "$scripts/rman-backup.sh" "$option"
++    ! grep -q 'unbound variable' "$test_dir/console"
++done
++for option in --job-name --job-script --job-args --logs-dir; do
++    expect_status 2 bash "$scripts/job-runner.sh" "$option"
++    ! grep -q 'unbound variable' "$test_dir/console"
++done
++expect_status 2 bash "$scripts/rman-backup.sh"
++expect_status 2 bash "$scripts/job-runner.sh"
++expect_status 2 bash "$scripts/rman-backup.sh" unexpected
++expect_status 2 bash "$scripts/job-runner.sh" unexpected
++expect_ok bash "$scripts/rman-backup.sh" --help
++grep -q -- '--dry-run' "$test_dir/console"
++! grep -q 'RMAN job finished' "$test_dir/console"
++expect_ok bash "$scripts/job-runner.sh" --help
++grep -q -- '--dry-run' "$test_dir/console"
++for option in -s -t -v -h; do
++    expect_status 2 bash "$scripts/rman-backup.sh" "$option"
++done
++for option in -n -j -p -v -h; do
++    expect_status 2 bash "$scripts/job-runner.sh" "$option"
++done
++echo 'PASS: short options are rejected'
++echo 'PASS: missing options and values report errors without unbound variables'
++
++for task in database-i0 database-i1 archivelog restore_validate; do
++    run_rman "$task"
++    grep -q 'CONNECT TARGET /' "$test_dir/generated.rman"
++    case $task in
++        database-i0) grep -q 'INCREMENTAL LEVEL = 0' "$test_dir/generated.rman" ;;
++        database-i1) grep -q 'INCREMENTAL LEVEL = 1' "$test_dir/generated.rman" ;;
++        archivelog) grep -q 'NOT BACKED UP 1 TIMES' "$test_dir/generated.rman" ;;
++        restore_validate) grep -q 'RESTORE DATABASE VALIDATE;' "$test_dir/generated.rman" ;;
++    esac
++    assert_temp_empty
++    assert_no_diagnostics "$test_dir/logs $task"
++    find "$test_dir/logs $task" -mindepth 1 -maxdepth 1 -type f -name '*.log' -print -quit | grep -q .
++    grep -Eq 'rman-backup\.sh\[[0-9]+\]: start sid=' "$test_dir/logs $task/rman-backup.sh.log"
++    grep -Eq 'rman-backup\.sh\[[0-9]+\]: finish sid=' "$test_dir/logs $task/rman-backup.sh.log"
++    ! grep -Eq '^(Backup Config|SID Backup Config|ORACLE_SID|Base Backups Directory|Logs Directory|Task:|[0-9].*Begin RMAN Job|[0-9].*End RMAN Job)' \
++        "$test_dir/logs $task/rman-backup.sh.log"
++done
++echo 'PASS: all four tasks support spaces and new log directories; temp files are cleaned'
++
++silent_logs="$test_dir/silent logs"
++bash "$scripts/rman-backup.sh" --silent --sid=orcl --task=archivelog \
++    --logs-dir="$silent_logs" --base-backup-dir="$test_dir/silent backups"
++if grep -Eq 'Backup Config|SID Backup Config|ORACLE_SID|Begin RMAN Job|End RMAN Job|RMAN job finished|Diagnostics saved' \
++    "$silent_logs/rman-backup.sh.log"; then
++    echo 'FAIL: --silent wrote routine RMAN messages' >&2
++    exit 1
++fi
++assert_temp_empty
++assert_no_diagnostics "$silent_logs"
++echo 'PASS: --silent suppresses routine RMAN messages while preserving diagnostics'
++
++rm -f -- "$test_dir/generated.rman"
++dry_logs="$test_dir/dry logs"
++dry_backups="$test_dir/dry backups"
++bash "$scripts/rman-backup.sh" --dry-run --sid=orcl --task=archivelog \
++    --logs-dir="$dry_logs" --base-backup-dir="$dry_backups" > "$test_dir/dry-run.out" 2>&1
++grep -q 'DRY RUN: would execute:' "$test_dir/dry-run.out"
++grep -q 'BACKUP AS COMPRESSED BACKUPSET ARCHIVELOG ALL' "$test_dir/dry-run.out"
++[[ ! -e $test_dir/generated.rman ]]
++[[ ! -e $dry_logs/rman-backup.sh.log ]]
++dry_temp=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d -name 'rman.*' -print -quit)
++[[ -n $dry_temp && -f $dry_temp/rman.scr ]]
++rm -rf -- "$dry_temp"
++assert_temp_empty
++echo 'PASS: --dry-run shows RMAN command/script without running RMAN or cleanup deletes'
++
++arg_string=$(cat <<'ARG_STRING'
++alpha "two words" '' escaped\ space '*' '$(touch injected)' "$HOME" "quote: \"yes\""
++ARG_STRING
++)
++bash "$scripts/job-runner.sh" --job-name="$job" --job-script=args.sh --job-args="$arg_string" --logs-dir="$test_dir/new runner logs"
++mapfile -d '' -t actual < "$test_dir/args.bin"
++expected=(alpha 'two words' '' 'escaped space' '*' '$(touch injected)' '$HOME' 'quote: "yes"')
++[[ ${#actual[@]} -eq ${#expected[@]} ]]
++for i in "${!expected[@]}"; do [[ ${actual[i]} == "${expected[i]}" ]]; done
++for invalid in '"unclosed' "'unclosed" 'trailing\'; do
++    expect_status 2 bash "$scripts/job-runner.sh" --job-name="$job" --job-script=args.sh --job-args="$invalid" --logs-dir="$test_dir/new runner logs"
++done
++echo 'PASS: --job-args handles quotes/escapes/empty args without expansions'
++
++TEST_MODE=fail
++expect_status 17 run_rman archivelog
++grep -q 'mock stdout' "$test_dir/logs archivelog/rman-backup.sh.log"
++grep -q 'mock stderr' "$test_dir/logs archivelog/rman-backup.sh.log"
++assert_temp_empty
++assert_diagnostics "$test_dir/logs archivelog" 17
++grep -q 'mock stderr' "$saved_diagnostics/rman.out"
++TEST_MODE=no-log
++expect_status 23 run_rman archivelog
++assert_temp_empty
++assert_diagnostics "$test_dir/logs archivelog" 23
++[[ -f $saved_diagnostics/rman.scr && ! -f $saved_diagnostics/rman.log ]]
++grep -q 'mock stdout' "$saved_diagnostics/rman.out"
++echo 'PASS: failure codes and both output streams survive, even without an RMAN log'
++
++TEST_MODE=success
++printf '\ncreate_rman_backup_archivelog_script() { echo partial-script > "$1"; return 19; }\n' >> "$scripts/rman-backup.orcl.conf"
++expect_status 19 run_rman archivelog
++assert_temp_empty
++assert_diagnostics "$test_dir/logs archivelog" 19
++grep -q 'partial-script' "$saved_diagnostics/rman.scr"
++grep -q '^error_line=[0-9]' "$saved_diagnostics/status.txt"
++cp -- "$project_dir/rman-backup.orcl.conf" "$scripts/rman-backup.orcl.conf"
++echo 'PASS: generation errors retain their status and trigger cleanup'
++
++TEST_MODE=hold
++for signal in TERM HUP; do
++    bash "$scripts/rman-backup.sh" --sid=orcl --task=archivelog \
++        --logs-dir="$test_dir/signal logs" --base-backup-dir="$test_dir/backup files" &
++    active_pid=$!
++    wait_for_rman
++    kill -"$signal" "$active_pid"
++    result=0
++    wait "$active_pid" || result=$?
++    active_pid=""
++    if [[ $signal == TERM ]]; then [[ $result -eq 143 ]]; else [[ $result -eq 129 ]]; fi
++    [[ -f $test_dir/stopped ]]
++    ! kill -0 "$(cat "$test_dir/rman.pid")" 2>/dev/null
++    assert_temp_empty
++    assert_diagnostics "$test_dir/signal logs" "$result" "$signal"
++    grep -q 'mock stderr' "$saved_diagnostics/rman.out"
++    rm -- "$test_dir/rman.pid" "$test_dir/stopped"
++done
++echo 'PASS: TERM/HUP stop RMAN, preserve signal exit codes and clean temporary files'
++
++# Run in the foreground: asynchronous Bash commands can inherit ignored SIGINT.
++expect_status 130 timeout --foreground --preserve-status --signal=INT 1 \
++    bash "$scripts/rman-backup.sh" --sid=orcl --task=archivelog \
++    --logs-dir="$test_dir/int logs" --base-backup-dir="$test_dir/backup files"
++[[ -f $test_dir/stopped ]]
++assert_temp_empty
++assert_diagnostics "$test_dir/int logs" 130 INT
++grep -q 'mock stderr' "$saved_diagnostics/rman.out"
++rm -- "$test_dir/rman.pid" "$test_dir/stopped"
++echo 'PASS: SIGINT preserves diagnostics and exits 130 after child termination'
++
++job_string="--sid=orcl --task=archivelog --logs-dir='$test_dir/chain logs' --base-backup-dir='$test_dir/backup files'"
++bash "$scripts/job-runner.sh" --job-name="$job" --job-script=rman-backup.sh --job-args="$job_string" --logs-dir="$test_dir/chain logs" &
++active_pid=$!
++wait_for_rman
++kill -TERM "$active_pid"
++result=0
++wait "$active_pid" || result=$?
++active_pid=""
++[[ $result -eq 143 && -f $test_dir/stopped ]]
++! kill -0 "$(cat "$test_dir/rman.pid")" 2>/dev/null
++assert_temp_empty
++flock -n "$HOME/.job-runner-locks/rman-backup.orcl.archivelog.lock" true
++echo 'PASS: runner forwards termination through to RMAN and releases the lock only after exit'
++
++# Simulate an archive write error, including after a successful RMAN operation.
++cat > "$test_dir/bin/cp" <<'COPY'
++#!/bin/bash
++if [[ ${TEST_COPY_FAILURE:-0} == 1 ]]; then
++    for argument in "$@"; do
++        if [[ $argument == *'/rman-'* || $argument == *'logs archivelog/'*.log ]]; then exit 74; fi
++    done
++fi
++exec /bin/cp "$@"
++COPY
++chmod 700 "$test_dir/bin/cp"
++export TEST_COPY_FAILURE=1
++for mode in fail success; do
++    TEST_MODE=$mode
++    if [[ $mode == fail ]]; then expected_status=17; else expected_status=74; fi
++    expect_status "$expected_status" run_rman archivelog
++    retained=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d)
++    [[ -n $retained && -f $retained/rman.scr && -f $retained/rman.log && -f $retained/rman.out ]]
++    grep -q 'mock stderr' "$retained/rman.out"
++    grep -Fq "retained temporary files: $retained" "$test_dir/logs archivelog/rman-backup.sh.log"
++    rm -- "$retained/rman.scr" "$retained/rman.log" "$retained/rman.out"
++    rmdir -- "$retained"
++done
++TEST_MODE=hold
++rm -f -- "$test_dir/rman.pid" "$test_dir/stopped"
++bash "$scripts/rman-backup.sh" --sid=orcl --task=archivelog \
++    --logs-dir="$test_dir/signal archive failure" --base-backup-dir="$test_dir/backup files" &
++active_pid=$!
++wait_for_rman
++kill -TERM "$active_pid"
++result=0
++wait "$active_pid" || result=$?
++active_pid=""
++[[ $result -eq 143 && -f $test_dir/stopped ]]
++retained=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d)
++[[ -n $retained && -f $retained/rman.scr && -f $retained/rman.log && -f $retained/rman.out ]]
++rm -- "$retained/rman.scr" "$retained/rman.log" "$retained/rman.out"
++rmdir -- "$retained"
++unset TEST_COPY_FAILURE
++echo 'PASS: archive failures retain all original files and preserve failure/signal precedence'
++
++TEST_MODE=success
++mapfile -t archives_before < <(find "$test_dir/logs archivelog" -mindepth 1 -maxdepth 1 -type d -name 'rman-*')
++run_rman archivelog
++run_rman archivelog
++mapfile -t archives < <(find "$test_dir/logs archivelog" -mindepth 1 -maxdepth 1 -type d -name 'rman-*')
++[[ ${#archives[@]} -eq ${#archives_before[@]} ]]
++assert_temp_empty
++echo 'PASS: successful repeated jobs do not leave diagnostics directories'
+diff --git a/./tests/job-runner-locks.sh b/./tests/job-runner-locks.sh
+new file mode 100644
+index 0000000..6a77238
+--- /dev/null
++++ b/./tests/job-runner-locks.sh
+@@ -0,0 +1,194 @@
++#!/bin/bash
++# Integration tests: no Oracle connection or backup commands are used.
++set -euo pipefail
++
++source_runner=${1:-"$(dirname "$0")/../job-runner.sh"}
++test_dir=$(mktemp -d)
++real_home=$HOME
++export HOME="$test_dir/home"
++mkdir -p "$HOME"
++job="runner-test-$(id -u)-$$"
++lock_file="$HOME/.job-runner-locks/$job.lock"
++pids=()
++cleanup() {
++    touch "$test_dir/release"
++    for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
++    # Remove only this test's known files, after its children have finished.
++    rm -f -- "$lock_file" \
++        "$test_dir/job-runner.sh" "$test_dir/job-runner.conf" \
++        "$test_dir/child.sh" "$test_dir/rman-backup.sh" "$test_dir/job-runner.sh.log" \
++        "$test_dir/starts" "$test_dir/release" "$test_dir/finished" \
++        "$test_dir/rman-starts" "$test_dir/rman-release" \
++        "$test_dir/injected" "$test_dir/target" "$test_dir/child.pid"
++    rm -f -- "$HOME/.job-runner-locks/rman-backup.orcl.archivelog.lock" \
++        "$HOME/.job-runner-locks/rman-backup.test.archivelog.lock" \
++        "$HOME/.job-runner-locks/rman-backup.orcl.database-i0.lock"
++    export HOME=$real_home
++    rmdir -- "$test_dir/home/.job-runner-locks" "$test_dir/home" 2>/dev/null || true
++    rmdir -- "$test_dir"
++}
++trap cleanup EXIT
++cp -- "$source_runner" "$test_dir/job-runner.sh"
++printf '# Test configuration\n' > "$test_dir/job-runner.conf"
++cat > "$test_dir/child.sh" <<'CHILD'
++#!/bin/bash
++set -euo pipefail
++test_dir=$1
++mode=$2
++echo "$$" > "$test_dir/child.pid"
++echo start >> "$test_dir/starts"
++if [[ $mode == hold ]]; then
++    while [[ ! -f "$test_dir/release" ]]; do sleep 0.05; done
++fi
++touch "$test_dir/finished"
++[[ $mode != fail ]] || exit 7
++CHILD
++chmod 700 "$test_dir/child.sh"
++cat > "$test_dir/rman-backup.sh" <<'RMAN_CHILD'
++#!/bin/bash
++set -euo pipefail
++sid=""
++task=""
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --sid=*) sid=${1#*=}; shift ;;
++        --task=*) task=${1#*=}; shift ;;
++        --base-backup-dir=*|--logs-dir=*) shift ;;
++        *) shift ;;
++    esac
++done
++printf '%s %s\n' "$sid" "$task" >> "$TEST_DIR/rman-starts"
++while [[ ! -f "$TEST_DIR/rman-release" ]]; do sleep 0.05; done
++RMAN_CHILD
++chmod 700 "$test_dir/rman-backup.sh"
++run_job() {
++    bash "$test_dir/job-runner.sh" --logs-dir="$test_dir" \
++        --job-name="$job" --job-script=child.sh --job-args="$test_dir $1"
++}
++run_rman_job() {
++    TEST_DIR=$test_dir bash "$test_dir/job-runner.sh" --logs-dir="$test_dir" \
++        --job-name=rman --job-script=rman-backup.sh \
++        --job-args="--sid=$1 --task=$2 --base-backup-dir=$test_dir --logs-dir=$test_dir"
++}
++wait_for_file() {
++    for ((attempt=0; attempt<200; attempt++)); do
++        [[ ! -f $1 ]] || return 0
++        sleep 0.05
++    done
++    echo "FAIL: timed out waiting for $1" >&2
++    exit 1
++}
++bash -n "$test_dir/job-runner.sh"
++
++for ((i=0; i<12; i++)); do
++    run_job hold &
++    pids+=("$!")
++done
++wait_for_file "$test_dir/starts"
++sleep 1
++[[ $(wc -l < "$test_dir/starts") -eq 1 ]]
++touch "$test_dir/release"
++for pid in "${pids[@]}"; do wait "$pid"; done
++pids=()
++[[ $(wc -l < "$test_dir/starts") -eq 1 ]]
++echo 'PASS: 12 concurrent invocations execute exactly one child'
++rm -- "$test_dir/starts" "$test_dir/release" "$test_dir/finished"
++
++for spec in "orcl archivelog" "orcl archivelog" "test archivelog" "orcl database-i0"; do
++    run_rman_job $spec &
++    pids+=("$!")
++done
++wait_for_file "$test_dir/rman-starts"
++sleep 1
++[[ $(wc -l < "$test_dir/rman-starts") -eq 3 ]]
++grep -qx 'orcl archivelog' "$test_dir/rman-starts"
++grep -qx 'test archivelog' "$test_dir/rman-starts"
++grep -qx 'orcl database-i0' "$test_dir/rman-starts"
++touch "$test_dir/rman-release"
++for pid in "${pids[@]}"; do wait "$pid"; done
++pids=()
++[[ $(wc -l < "$test_dir/rman-starts") -eq 3 ]]
++echo 'PASS: RMAN locks are scoped by SID and task'
++rm -- "$test_dir/rman-starts" "$test_dir/rman-release"
++
++if TEST_DIR=$test_dir bash "$test_dir/job-runner.sh" --logs-dir="$test_dir" \
++    --job-name=rman --job-script=rman-backup.sh \
++    --job-args="--base-backup-dir=$test_dir --logs-dir=$test_dir"; then
++    echo 'FAIL: rman-backup job without SID/task was accepted' >&2
++    exit 1
++fi
++echo 'PASS: RMAN jobs require SID and task for locking'
++
++if run_job fail; then
++    echo 'FAIL: child error was lost' >&2
++    exit 1
++else
++    [[ $? -eq 7 ]]
++fi
++run_job quick
++[[ $(wc -l < "$test_dir/starts") -eq 2 ]]
++grep -Eq 'job-runner\.sh\[[0-9]+\]: start job=' "$test_dir/job-runner.sh.log"
++grep -Eq 'job-runner\.sh\[[0-9]+\]: finish job=' "$test_dir/job-runner.sh.log"
++! grep -Eq '^[[:space:]]+(lock|script|arguments):' "$test_dir/job-runner.sh.log"
++echo 'PASS: child error is preserved and lock is released for the next run'
++rm -- "$test_dir/starts" "$test_dir/finished" "$test_dir/job-runner.sh.log"
++
++bash "$test_dir/job-runner.sh" --silent --logs-dir="$test_dir" \
++    --job-name="$job" --job-script=child.sh --job-args="$test_dir quick"
++if grep -Eq 'Start job|End job|script:|arguments:' "$test_dir/job-runner.sh.log"; then
++    echo 'FAIL: --silent wrote routine runner messages' >&2
++    exit 1
++fi
++echo 'PASS: --silent suppresses routine runner messages'
++rm -- "$test_dir/job-runner.sh.log" "$test_dir/starts" "$test_dir/finished"
++
++bash "$test_dir/job-runner.sh" --dry-run --logs-dir="$test_dir" \
++    --job-name="$job" --job-script=child.sh --job-args="$test_dir quick" > "$test_dir/dry-run.out" 2>&1
++grep -q 'DRY RUN: would execute:' "$test_dir/dry-run.out"
++[[ ! -e $test_dir/starts ]]
++[[ ! -e $test_dir/job-runner.sh.log ]]
++echo 'PASS: --dry-run shows runner command without starting generic jobs'
++rm -- "$test_dir/dry-run.out"
++
++# Start bash directly so the PID below identifies the runner, not a function shell.
++bash "$test_dir/job-runner.sh" --logs-dir="$test_dir" \
++    --job-name="$job" --job-script=child.sh --job-args="$test_dir hold" &
++runner_pid=$!
++pids+=("$runner_pid")
++wait_for_file "$test_dir/starts"
++kill -KILL "$runner_pid"
++set +e
++wait "$runner_pid" 2>/dev/null
++set -e
++pids=()
++run_job quick
++[[ $(wc -l < "$test_dir/starts") -eq 1 ]]
++touch "$test_dir/release"
++wait_for_file "$test_dir/finished"
++# The child may still be closing descriptors after creating the marker.
++for ((attempt=0; attempt<200; attempt++)); do
++    if flock -n "$lock_file" true; then break; fi
++    sleep 0.05
++done
++flock -n "$lock_file" true
++run_job quick
++[[ $(wc -l < "$test_dir/starts") -eq 2 ]]
++echo 'PASS: child retains lock after runner SIGKILL; lock releases after child exit'
++
++printf 'unchanged\n' > "$test_dir/target"
++rm -- "$lock_file"
++ln -s "$test_dir/target" "$lock_file"
++if run_job quick; then
++    echo 'FAIL: symlink lock was accepted' >&2
++    exit 1
++fi
++[[ $(cat "$test_dir/target") == unchanged ]]
++echo 'PASS: symlink lock is rejected without modifying its target'
++rm -- "$lock_file"
++
++job='../invalid-job-name'
++if run_job quick; then
++    echo 'FAIL: path traversal job name was accepted' >&2
++    exit 1
++fi
++echo 'PASS: path traversal job name is rejected'
