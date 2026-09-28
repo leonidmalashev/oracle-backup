@@ -127,8 +127,8 @@ else
 fi
 run_job quick
 [[ $(wc -l < "$test_dir/starts") -eq 2 ]]
-grep -Eq 'job-runner\.sh\[[0-9]+\]: start job=' "$test_dir/job-runner.sh.log"
-grep -Eq 'job-runner\.sh\[[0-9]+\]: finish job=' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: start --job-name=' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=' "$test_dir/job-runner.sh.log"
 ! grep -Eq '^[[:space:]]+(lock|script|arguments):' "$test_dir/job-runner.sh.log"
 echo 'PASS: child error is preserved and lock is released for the next run'
 rm -- "$test_dir/starts" "$test_dir/finished" "$test_dir/job-runner.sh.log"

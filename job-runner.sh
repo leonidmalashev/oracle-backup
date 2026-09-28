@@ -180,7 +180,7 @@ cleanup() {
     fi
     if $_job_started; then
         if ! $_silent || [[ $status -ne 0 ]]; then
-            printf '%s finish job=%s status=%s signal=%s\n' \
+            printf '%s finish --job-name=%s --status=%s --signal=%s\n' \
                 "$(log_prefix)" "$(log_escape "$_job_name")" "$status" "$(log_escape "${_signal:-none}")" >&2 || true
         fi
     fi
@@ -297,9 +297,9 @@ fi
 
 _job_started=true
 if ! $_silent; then
-    printf '%s start job=%s lock=%s script=%s args=%s\n' \
+    printf '%s start --job-name=%s --lock=%s --job-script=%s --job-args=%s --logs-dir=%s\n' \
         "$(log_prefix)" "$(log_escape "$_job_name")" "$(log_escape "$_lock_name")" \
-        "$(log_escape "$_job_script")" "$(log_escape "$_job_args")"
+        "$(log_escape "$_job_script")" "$(log_escape "$_job_args")" "$(log_escape "$_logs_dir")"
 fi
 if $_silent && [[ $(basename -- "$_job_script") == rman-backup.sh ]] && ! has_job_arg --silent; then
     job_args+=(--silent)
@@ -320,6 +320,6 @@ fi
 _child_pid=$!
 if wait "$_child_pid"; then return_code=0; else return_code=$?; fi
 _child_pid=""
-[[ $return_code -ne 0 ]] && printf '%s child_exit job=%s status=%s\n' \
+[[ $return_code -ne 0 ]] && printf '%s child_exit --job-name=%s --status=%s\n' \
     "$(log_prefix)" "$(log_escape "$_job_name")" "$return_code"
 exit "$return_code"

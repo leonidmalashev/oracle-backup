@@ -1,113 +1,2667 @@
+diff --git a/./.git/COMMIT_EDITMSG b/./.git/COMMIT_EDITMSG
+new file mode 100644
+index 0000000..773ddc8
+--- /dev/null
++++ b/./.git/COMMIT_EDITMSG
+@@ -0,0 +1 @@
++Harden Oracle backup scripts
+diff --git a/./.git/HEAD b/./.git/HEAD
+new file mode 100644
+index 0000000..b870d82
+--- /dev/null
++++ b/./.git/HEAD
+@@ -0,0 +1 @@
++ref: refs/heads/main
+diff --git a/./.git/config b/./.git/config
+new file mode 100644
+index 0000000..f249591
+--- /dev/null
++++ b/./.git/config
+@@ -0,0 +1,16 @@
++[core]
++	repositoryformatversion = 0
++	filemode = false
++	bare = false
++	logallrefupdates = true
++	symlinks = false
++	ignorecase = true
++[user]
++	name = lmalashev
++	email = leonid.malashev@gmail.com
++[remote "origin"]
++	url = git@github.com:leonidmalashev/oracle-backup.git
++	fetch = +refs/heads/*:refs/remotes/origin/*
++[branch "main"]
++	remote = origin
++	merge = refs/heads/main
+diff --git a/./.git/description b/./.git/description
+new file mode 100644
+index 0000000..498b267
+--- /dev/null
++++ b/./.git/description
+@@ -0,0 +1 @@
++Unnamed repository; edit this file 'description' to name the repository.
+diff --git a/./.git/hooks/applypatch-msg.sample b/./.git/hooks/applypatch-msg.sample
+new file mode 100644
+index 0000000..a5d7b84
+--- /dev/null
++++ b/./.git/hooks/applypatch-msg.sample
+@@ -0,0 +1,15 @@
++#!/bin/sh
++#
++# An example hook script to check the commit log message taken by
++# applypatch from an e-mail message.
++#
++# The hook should exit with non-zero status after issuing an
++# appropriate message if it wants to stop the commit.  The hook is
++# allowed to edit the commit message file.
++#
++# To enable this hook, rename this file to "applypatch-msg".
++
++. git-sh-setup
++commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
++test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
++:
+diff --git a/./.git/hooks/commit-msg.sample b/./.git/hooks/commit-msg.sample
+new file mode 100644
+index 0000000..f7458ef
+--- /dev/null
++++ b/./.git/hooks/commit-msg.sample
+@@ -0,0 +1,74 @@
++#!/bin/sh
++#
++# An example hook script to check the commit log message.
++# Called by "git commit" with one argument, the name of the file
++# that has the commit message.  The hook should exit with non-zero
++# status after issuing an appropriate message if it wants to stop the
++# commit.  The hook is allowed to edit the commit message file.
++#
++# To enable this hook, rename this file to "commit-msg".
++
++# Uncomment the below to add a Signed-off-by line to the message.
++# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
++# hook is more suited to it.
++#
++# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
++# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
++
++# This example catches duplicate Signed-off-by lines and messages that
++# would confuse 'git am'.
++
++ret=0
++
++test "" = "$(grep '^Signed-off-by: ' "$1" |
++	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
++	echo >&2 Duplicate Signed-off-by lines.
++	ret=1
++}
++
++comment_re="$(
++	{
++		git config --get-regexp "^core\.comment(char|string)\$" ||
++			echo '#'
++	} | sed -n -e '
++		${
++			s/^[^ ]* //
++			s|[][*./\]|\\&|g
++			s/^auto$/[#;@!$%^&|:]/
++			p
++		}'
++)"
++scissors_line="^${comment_re} -\{8,\} >8 -\{8,\}\$"
++comment_line="^${comment_re}.*"
++blank_line='^[ 	]*$'
++# Disallow lines starting with "diff -" or "Index: " in the body of the
++# message. Stop looking if we see a scissors line.
++line="$(sed -n -e "
++	# Skip comments and blank lines at the start of the file.
++	/${scissors_line}/q
++	/${comment_line}/d
++	/${blank_line}/d
++	# The first paragraph will become the subject header so
++	# does not need to be checked.
++	: subject
++	n
++	/${scissors_line}/q
++	/${blank_line}/!b subject
++	# Check the body of the message for problematic
++	# prefixes.
++	: body
++	n
++	/${scissors_line}/q
++	/${comment_line}/b body
++	/^diff -/{p;q;}
++	/^Index: /{p;q;}
++	b body
++	" "$1")"
++if test -n "$line"
++then
++	echo >&2 "Message contains a diff that will confuse 'git am'."
++	echo >&2 "To fix this indent the diff."
++	ret=1
++fi
++
++exit $ret
+diff --git a/./.git/hooks/fsmonitor-watchman.sample b/./.git/hooks/fsmonitor-watchman.sample
+new file mode 100644
+index 0000000..429e0a5
+--- /dev/null
++++ b/./.git/hooks/fsmonitor-watchman.sample
+@@ -0,0 +1,168 @@
++#!/usr/bin/perl
++
++use strict;
++use warnings;
++use IPC::Open2;
++
++# An example hook script to integrate Watchman
++# (https://facebook.github.io/watchman/) with git to speed up detecting
++# new and modified files.
++#
++# The hook is passed a version (currently 2) and last update token
++# formatted as a string and outputs to stdout a new update token and
++# all files that have been modified since the update token. Paths must
++# be relative to the root of the working tree and separated by a single NUL.
++#
++# To enable this hook, rename this file to "query-watchman" and set
++# 'git config core.fsmonitor .git/hooks/query-watchman'
++#
++my ($version, $last_update_token) = @ARGV;
++
++# Uncomment for debugging
++# print STDERR "$0 $version $last_update_token\n";
++
++# Check the hook interface version
++if ($version ne 2) {
++	die "Unsupported query-fsmonitor hook version '$version'.\n" .
++	    "Falling back to scanning...\n";
++}
++
++my $git_work_tree = get_working_dir();
++
++my $json_pkg;
++eval {
++	require JSON::XS;
++	$json_pkg = "JSON::XS";
++	1;
++} or do {
++	require JSON::PP;
++	$json_pkg = "JSON::PP";
++};
++
++launch_watchman();
++
++sub launch_watchman {
++	my $o = watchman_query();
++	if (is_work_tree_watched($o)) {
++		output_result($o->{clock}, @{$o->{files}});
++	}
++}
++
++sub output_result {
++	my ($clockid, @files) = @_;
++
++	# Uncomment for debugging watchman output
++	# open (my $fh, ">", ".git/watchman-output.out");
++	# binmode $fh, ":utf8";
++	# print $fh "$clockid\n@files\n";
++	# close $fh;
++
++	binmode STDOUT, ":utf8";
++	print $clockid;
++	print "\0";
++	local $, = "\0";
++	print @files;
++}
++
++sub watchman_clock {
++	my $response = qx/watchman clock "$git_work_tree"/;
++	die "Failed to get clock id on '$git_work_tree'.\n" .
++		"Falling back to scanning...\n" if $? != 0;
++
++	return $json_pkg->new->utf8->decode($response);
++}
++
++sub watchman_query {
++	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
++	or die "open2() failed: $!\n" .
++	"Falling back to scanning...\n";
++
++	# In the query expression below we're asking for names of files that
++	# changed since $last_update_token but not from the .git folder.
++	#
++	# To accomplish this, we're using the "since" generator to use the
++	# recency index to select candidate nodes and "fields" to limit the
++	# output to file names only. Then we're using the "expression" term to
++	# further constrain the results.
++	my $last_update_line = "";
++	if (substr($last_update_token, 0, 1) eq "c") {
++		$last_update_token = "\"$last_update_token\"";
++		$last_update_line = qq[\n"since": $last_update_token,];
++	}
++	my $query = <<"	END";
++		["query", "$git_work_tree", {$last_update_line
++			"fields": ["name"],
++			"expression": ["not", ["dirname", ".git"]]
++		}]
++	END
++
++	# Uncomment for debugging the watchman query
++	# open (my $fh, ">", ".git/watchman-query.json");
++	# print $fh $query;
++	# close $fh;
++
++	print CHLD_IN $query;
++	close CHLD_IN;
++	my $response = do {local $/; <CHLD_OUT>};
++
++	# Uncomment for debugging the watch response
++	# open ($fh, ">", ".git/watchman-response.json");
++	# print $fh $response;
++	# close $fh;
++
++	die "Watchman: command returned no output.\n" .
++	"Falling back to scanning...\n" if $response eq "";
++	die "Watchman: command returned invalid output: $response\n" .
++	"Falling back to scanning...\n" unless $response =~ /^\{/;
++
++	return $json_pkg->new->utf8->decode($response);
++}
++
++sub is_work_tree_watched {
++	my ($output) = @_;
++	my $error = $output->{error};
++	if ($error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
++		my $response = qx/watchman watch "$git_work_tree"/;
++		die "Failed to make watchman watch '$git_work_tree'.\n" .
++		    "Falling back to scanning...\n" if $? != 0;
++		$output = $json_pkg->new->utf8->decode($response);
++		$error = $output->{error};
++		die "Watchman: $error.\n" .
++		"Falling back to scanning...\n" if $error;
++
++		# Uncomment for debugging watchman output
++		# open (my $fh, ">", ".git/watchman-output.out");
++		# close $fh;
++
++		# Watchman will always return all files on the first query so
++		# return the fast "everything is dirty" flag to git and do the
++		# Watchman query just to get it over with now so we won't pay
++		# the cost in git to look up each individual file.
++		my $o = watchman_clock();
++		$error = $o->{error};
++
++		die "Watchman: $error.\n" .
++		"Falling back to scanning...\n" if $error;
++
++		output_result($o->{clock}, ("/"));
++		return 0;
++	}
++
++	die "Watchman: $error.\n" .
++	"Falling back to scanning...\n" if $error;
++
++	return 1;
++}
++
++sub get_working_dir {
++	my $working_dir;
++	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
++		$working_dir = Win32::GetCwd();
++		$working_dir =~ tr/\\/\//;
++	} else {
++		require Cwd;
++		$working_dir = Cwd::cwd();
++	}
++
++	return $working_dir;
++}
+diff --git a/./.git/hooks/post-update.sample b/./.git/hooks/post-update.sample
+new file mode 100644
+index 0000000..ec17ec1
+--- /dev/null
++++ b/./.git/hooks/post-update.sample
+@@ -0,0 +1,8 @@
++#!/bin/sh
++#
++# An example hook script to prepare a packed repository for use over
++# dumb transports.
++#
++# To enable this hook, rename this file to "post-update".
++
++exec git update-server-info
+diff --git a/./.git/hooks/pre-applypatch.sample b/./.git/hooks/pre-applypatch.sample
+new file mode 100644
+index 0000000..4142082
+--- /dev/null
++++ b/./.git/hooks/pre-applypatch.sample
+@@ -0,0 +1,14 @@
++#!/bin/sh
++#
++# An example hook script to verify what is about to be committed
++# by applypatch from an e-mail message.
++#
++# The hook should exit with non-zero status after issuing an
++# appropriate message if it wants to stop the commit.
++#
++# To enable this hook, rename this file to "pre-applypatch".
++
++. git-sh-setup
++precommit="$(git rev-parse --git-path hooks/pre-commit)"
++test -x "$precommit" && exec "$precommit" ${1+"$@"}
++:
+diff --git a/./.git/hooks/pre-commit.sample b/./.git/hooks/pre-commit.sample
+new file mode 100644
+index 0000000..29ed5ee
+--- /dev/null
++++ b/./.git/hooks/pre-commit.sample
+@@ -0,0 +1,49 @@
++#!/bin/sh
++#
++# An example hook script to verify what is about to be committed.
++# Called by "git commit" with no arguments.  The hook should
++# exit with non-zero status after issuing an appropriate message if
++# it wants to stop the commit.
++#
++# To enable this hook, rename this file to "pre-commit".
++
++if git rev-parse --verify HEAD >/dev/null 2>&1
++then
++	against=HEAD
++else
++	# Initial commit: diff against an empty tree object
++	against=$(git hash-object -t tree /dev/null)
++fi
++
++# If you want to allow non-ASCII filenames set this variable to true.
++allownonascii=$(git config --type=bool hooks.allownonascii)
++
++# Redirect output to stderr.
++exec 1>&2
++
++# Cross platform projects tend to avoid non-ASCII filenames; prevent
++# them from being added to the repository. We exploit the fact that the
++# printable range starts at the space character and ends with tilde.
++if [ "$allownonascii" != "true" ] &&
++	# Note that the use of brackets around a tr range is ok here, (it's
++	# even required, for portability to Solaris 10's /usr/bin/tr), since
++	# the square bracket bytes happen to fall in the designated range.
++	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
++	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
++then
++	cat <<\EOF
++Error: Attempt to add a non-ASCII file name.
++
++This can cause problems if you want to work with people on other platforms.
++
++To be portable it is advisable to rename the file.
++
++If you know what you are doing you can disable this check using:
++
++  git config hooks.allownonascii true
++EOF
++	exit 1
++fi
++
++# If there are whitespace errors, print the offending file names and fail.
++exec git diff-index --check --cached $against --
+diff --git a/./.git/hooks/pre-merge-commit.sample b/./.git/hooks/pre-merge-commit.sample
+new file mode 100644
+index 0000000..399eab1
+--- /dev/null
++++ b/./.git/hooks/pre-merge-commit.sample
+@@ -0,0 +1,13 @@
++#!/bin/sh
++#
++# An example hook script to verify what is about to be committed.
++# Called by "git merge" with no arguments.  The hook should
++# exit with non-zero status after issuing an appropriate message to
++# stderr if it wants to stop the merge commit.
++#
++# To enable this hook, rename this file to "pre-merge-commit".
++
++. git-sh-setup
++test -x "$GIT_DIR/hooks/pre-commit" &&
++        exec "$GIT_DIR/hooks/pre-commit"
++:
+diff --git a/./.git/hooks/pre-push.sample b/./.git/hooks/pre-push.sample
+new file mode 100644
+index 0000000..4ce688d
+--- /dev/null
++++ b/./.git/hooks/pre-push.sample
+@@ -0,0 +1,53 @@
++#!/bin/sh
++
++# An example hook script to verify what is about to be pushed.  Called by "git
++# push" after it has checked the remote status, but before anything has been
++# pushed.  If this script exits with a non-zero status nothing will be pushed.
++#
++# This hook is called with the following parameters:
++#
++# $1 -- Name of the remote to which the push is being done
++# $2 -- URL to which the push is being done
++#
++# If pushing without using a named remote those arguments will be equal.
++#
++# Information about the commits which are being pushed is supplied as lines to
++# the standard input in the form:
++#
++#   <local ref> <local oid> <remote ref> <remote oid>
++#
++# This sample shows how to prevent push of commits where the log message starts
++# with "WIP" (work in progress).
++
++remote="$1"
++url="$2"
++
++zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
++
++while read local_ref local_oid remote_ref remote_oid
++do
++	if test "$local_oid" = "$zero"
++	then
++		# Handle delete
++		:
++	else
++		if test "$remote_oid" = "$zero"
++		then
++			# New branch, examine all commits
++			range="$local_oid"
++		else
++			# Update to existing branch, examine new commits
++			range="$remote_oid..$local_oid"
++		fi
++
++		# Check for WIP commit
++		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
++		if test -n "$commit"
++		then
++			echo >&2 "Found WIP commit in $local_ref, not pushing"
++			exit 1
++		fi
++	fi
++done
++
++exit 0
+diff --git a/./.git/hooks/pre-rebase.sample b/./.git/hooks/pre-rebase.sample
+new file mode 100644
+index 0000000..6cbef5c
+--- /dev/null
++++ b/./.git/hooks/pre-rebase.sample
+@@ -0,0 +1,169 @@
++#!/bin/sh
++#
++# Copyright (c) 2006, 2008 Junio C Hamano
++#
++# The "pre-rebase" hook is run just before "git rebase" starts doing
++# its job, and can prevent the command from running by exiting with
++# non-zero status.
++#
++# The hook is called with the following parameters:
++#
++# $1 -- the upstream the series was forked from.
++# $2 -- the branch being rebased (or empty when rebasing the current branch).
++#
++# This sample shows how to prevent topic branches that are already
++# merged to 'next' branch from getting rebased, because allowing it
++# would result in rebasing already published history.
++
++publish=next
++basebranch="$1"
++if test "$#" = 2
++then
++	topic="refs/heads/$2"
++else
++	topic=`git symbolic-ref HEAD` ||
++	exit 0 ;# we do not interrupt rebasing detached HEAD
++fi
++
++case "$topic" in
++refs/heads/??/*)
++	;;
++*)
++	exit 0 ;# we do not interrupt others.
++	;;
++esac
++
++# Now we are dealing with a topic branch being rebased
++# on top of master.  Is it OK to rebase it?
++
++# Does the topic really exist?
++git show-ref -q "$topic" || {
++	echo >&2 "No such branch $topic"
++	exit 1
++}
++
++# Is topic fully merged to master?
++not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
++if test -z "$not_in_master"
++then
++	echo >&2 "$topic is fully merged to master; better remove it."
++	exit 1 ;# we could allow it, but there is no point.
++fi
++
++# Is topic ever merged to next?  If so you should not be rebasing it.
++only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
++only_next_2=`git rev-list ^master           ${publish} | sort`
++if test "$only_next_1" = "$only_next_2"
++then
++	not_in_topic=`git rev-list "^$topic" master`
++	if test -z "$not_in_topic"
++	then
++		echo >&2 "$topic is already up to date with master"
++		exit 1 ;# we could allow it, but there is no point.
++	else
++		exit 0
++	fi
++else
++	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
++	/usr/bin/perl -e '
++		my $topic = $ARGV[0];
++		my $msg = "* $topic has commits already merged to public branch:\n";
++		my (%not_in_next) = map {
++			/^([0-9a-f]+) /;
++			($1 => 1);
++		} split(/\n/, $ARGV[1]);
++		for my $elem (map {
++				/^([0-9a-f]+) (.*)$/;
++				[$1 => $2];
++			} split(/\n/, $ARGV[2])) {
++			if (!exists $not_in_next{$elem->[0]}) {
++				if ($msg) {
++					print STDERR $msg;
++					undef $msg;
++				}
++				print STDERR " $elem->[1]\n";
++			}
++		}
++	' "$topic" "$not_in_next" "$not_in_master"
++	exit 1
++fi
++
++<<\DOC_END
++
++This sample hook safeguards topic branches that have been
++published from being rewound.
++
++The workflow assumed here is:
++
++ * Once a topic branch forks from "master", "master" is never
++   merged into it again (either directly or indirectly).
++
++ * Once a topic branch is fully cooked and merged into "master",
++   it is deleted.  If you need to build on top of it to correct
++   earlier mistakes, a new topic branch is created by forking at
++   the tip of the "master".  This is not strictly necessary, but
++   it makes it easier to keep your history simple.
++
++ * Whenever you need to test or publish your changes to topic
++   branches, merge them into "next" branch.
++
++The script, being an example, hardcodes the publish branch name
++to be "next", but it is trivial to make it configurable via
++$GIT_DIR/config mechanism.
++
++With this workflow, you would want to know:
++
++(1) ... if a topic branch has ever been merged to "next".  Young
++    topic branches can have stupid mistakes you would rather
++    clean up before publishing, and things that have not been
++    merged into other branches can be easily rebased without
++    affecting other people.  But once it is published, you would
++    not want to rewind it.
++
++(2) ... if a topic branch has been fully merged to "master".
++    Then you can delete it.  More importantly, you should not
++    build on top of it -- other people may already want to
++    change things related to the topic as patches against your
++    "master", so if you need further changes, it is better to
++    fork the topic (perhaps with the same name) afresh from the
++    tip of "master".
++
++Let's look at this example:
++
++		   o---o---o---o---o---o---o---o---o---o "next"
++		  /       /           /           /
++		 /   a---a---b A     /           /
++		/   /               /           /
++	       /   /   c---c---c---c B         /
++	      /   /   /             \         /
++	     /   /   /   b---b C     \       /
++	    /   /   /   /             \     /
++    ---o---o---o---o---o---o---o---o---o---o---o "master"
++
++
++A, B and C are topic branches.
++
++ * A has one fix since it was merged up to "next".
++
++ * B has finished.  It has been fully merged up to "master" and "next",
++   and is ready to be deleted.
++
++ * C has not merged to "next" at all.
++
++We would want to allow C to be rebased, refuse A, and encourage
++B to be deleted.
++
++To compute (1):
++
++	git rev-list ^master ^topic next
++	git rev-list ^master        next
++
++	if these match, topic has not merged in next at all.
++
++To compute (2):
++
++	git rev-list master..topic
++
++	if this is empty, it is fully merged to "master".
++
++DOC_END
+diff --git a/./.git/hooks/pre-receive.sample b/./.git/hooks/pre-receive.sample
+new file mode 100644
+index 0000000..a1fd29e
+--- /dev/null
++++ b/./.git/hooks/pre-receive.sample
+@@ -0,0 +1,24 @@
++#!/bin/sh
++#
++# An example hook script to make use of push options.
++# The example simply echoes all push options that start with 'echoback='
++# and rejects all pushes when the "reject" push option is used.
++#
++# To enable this hook, rename this file to "pre-receive".
++
++if test -n "$GIT_PUSH_OPTION_COUNT"
++then
++	i=0
++	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
++	do
++		eval "value=\$GIT_PUSH_OPTION_$i"
++		case "$value" in
++		echoback=*)
++			echo "echo from the pre-receive-hook: ${value#*=}" >&2
++			;;
++		reject)
++			exit 1
++		esac
++		i=$((i + 1))
++	done
++fi
+diff --git a/./.git/hooks/prepare-commit-msg.sample b/./.git/hooks/prepare-commit-msg.sample
+new file mode 100644
+index 0000000..10fa14c
+--- /dev/null
++++ b/./.git/hooks/prepare-commit-msg.sample
+@@ -0,0 +1,42 @@
++#!/bin/sh
++#
++# An example hook script to prepare the commit log message.
++# Called by "git commit" with the name of the file that has the
++# commit message, followed by the description of the commit
++# message's source.  The hook's purpose is to edit the commit
++# message file.  If the hook fails with a non-zero status,
++# the commit is aborted.
++#
++# To enable this hook, rename this file to "prepare-commit-msg".
++
++# This hook includes three examples. The first one removes the
++# "# Please enter the commit message..." help message.
++#
++# The second includes the output of "git diff --name-status -r"
++# into the message, just before the "git status" output.  It is
++# commented because it doesn't cope with --amend or with squashed
++# commits.
++#
++# The third example adds a Signed-off-by line to the message, that can
++# still be edited.  This is rarely a good idea.
++
++COMMIT_MSG_FILE=$1
++COMMIT_SOURCE=$2
++SHA1=$3
++
++/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
++
++# case "$COMMIT_SOURCE,$SHA1" in
++#  ,|template,)
++#    /usr/bin/perl -i.bak -pe '
++#       print "\n" . `git diff --cached --name-status -r`
++# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
++#  *) ;;
++# esac
++
++# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
++# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
++# if test -z "$COMMIT_SOURCE"
++# then
++#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
++# fi
+diff --git a/./.git/hooks/push-to-checkout.sample b/./.git/hooks/push-to-checkout.sample
+new file mode 100644
+index 0000000..af5a0c0
+--- /dev/null
++++ b/./.git/hooks/push-to-checkout.sample
+@@ -0,0 +1,78 @@
++#!/bin/sh
++
++# An example hook script to update a checked-out tree on a git push.
++#
++# This hook is invoked by git-receive-pack(1) when it reacts to git
++# push and updates reference(s) in its repository, and when the push
++# tries to update the branch that is currently checked out and the
++# receive.denyCurrentBranch configuration variable is set to
++# updateInstead.
++#
++# By default, such a push is refused if the working tree and the index
++# of the remote repository has any difference from the currently
++# checked out commit; when both the working tree and the index match
++# the current commit, they are updated to match the newly pushed tip
++# of the branch. This hook is to be used to override the default
++# behaviour; however the code below reimplements the default behaviour
++# as a starting point for convenient modification.
++#
++# The hook receives the commit with which the tip of the current
++# branch is going to be updated:
++commit=$1
++
++# It can exit with a non-zero status to refuse the push (when it does
++# so, it must not modify the index or the working tree).
++die () {
++	echo >&2 "$*"
++	exit 1
++}
++
++# Or it can make any necessary changes to the working tree and to the
++# index to bring them to the desired state when the tip of the current
++# branch is updated to the new commit, and exit with a zero status.
++#
++# For example, the hook can simply run git read-tree -u -m HEAD "$1"
++# in order to emulate git fetch that is run in the reverse direction
++# with git push, as the two-tree form of git read-tree -u -m is
++# essentially the same as git switch or git checkout that switches
++# branches while keeping the local changes in the working tree that do
++# not interfere with the difference between the branches.
++
++# The below is a more-or-less exact translation to shell of the C code
++# for the default behaviour for git's push-to-checkout hook defined in
++# the push_to_deploy() function in builtin/receive-pack.c.
++#
++# Note that the hook will be executed from the repository directory,
++# not from the working tree, so if you want to perform operations on
++# the working tree, you will have to adapt your code accordingly, e.g.
++# by adding "cd .." or using relative paths.
++
++if ! git update-index -q --ignore-submodules --refresh
++then
++	die "Up-to-date check failed"
++fi
++
++if ! git diff-files --quiet --ignore-submodules --
++then
++	die "Working directory has unstaged changes"
++fi
++
++# This is a rough translation of:
++#
++#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
++if git cat-file -e HEAD 2>/dev/null
++then
++	head=HEAD
++else
++	head=$(git hash-object -t tree --stdin </dev/null)
++fi
++
++if ! git diff-index --quiet --cached --ignore-submodules $head --
++then
++	die "Working directory has staged changes"
++fi
++
++if ! git read-tree -u -m "$commit"
++then
++	die "Could not update working tree to new HEAD"
++fi
+diff --git a/./.git/hooks/sendemail-validate.sample b/./.git/hooks/sendemail-validate.sample
+new file mode 100644
+index 0000000..640bcf8
+--- /dev/null
++++ b/./.git/hooks/sendemail-validate.sample
+@@ -0,0 +1,77 @@
++#!/bin/sh
++
++# An example hook script to validate a patch (and/or patch series) before
++# sending it via email.
++#
++# The hook should exit with non-zero status after issuing an appropriate
++# message if it wants to prevent the email(s) from being sent.
++#
++# To enable this hook, rename this file to "sendemail-validate".
++#
++# By default, it will only check that the patch(es) can be applied on top of
++# the default upstream branch without conflicts in a secondary worktree. After
++# validation (successful or not) of the last patch of a series, the worktree
++# will be deleted.
++#
++# The following config variables can be set to change the default remote and
++# remote ref that are used to apply the patches against:
++#
++#   sendemail.validateRemote (default: origin)
++#   sendemail.validateRemoteRef (default: HEAD)
++#
++# Replace the TODO placeholders with appropriate checks according to your
++# needs.
++
++validate_cover_letter () {
++	file="$1"
++	# TODO: Replace with appropriate checks (e.g. spell checking).
++	true
++}
++
++validate_patch () {
++	file="$1"
++	# Ensure that the patch applies without conflicts.
++	git am -3 "$file" || return
++	# TODO: Replace with appropriate checks for this patch
++	# (e.g. checkpatch.pl).
++	true
++}
++
++validate_series () {
++	# TODO: Replace with appropriate checks for the whole series
++	# (e.g. quick build, coding style checks, etc.).
++	true
++}
++
++# main -------------------------------------------------------------------------
++
++if test "$GIT_SENDEMAIL_FILE_COUNTER" = 1
++then
++	remote=$(git config --default origin --get sendemail.validateRemote) &&
++	ref=$(git config --default HEAD --get sendemail.validateRemoteRef) &&
++	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
++	git worktree add -fd --checkout "$worktree" "refs/remotes/$remote/$ref" &&
++	git config --replace-all sendemail.validateWorktree "$worktree"
++else
++	worktree=$(git config --get sendemail.validateWorktree)
++fi || {
++	echo "sendemail-validate: error: failed to prepare worktree" >&2
++	exit 1
++}
++
++unset GIT_DIR GIT_WORK_TREE
++cd "$worktree" &&
++
++if grep -q "^diff --git " "$1"
++then
++	validate_patch "$1"
++else
++	validate_cover_letter "$1"
++fi &&
++
++if test "$GIT_SENDEMAIL_FILE_COUNTER" = "$GIT_SENDEMAIL_FILE_TOTAL"
++then
++	git config --unset-all sendemail.validateWorktree &&
++	trap 'git worktree remove -ff "$worktree"' EXIT &&
++	validate_series
++fi
+diff --git a/./.git/hooks/update.sample b/./.git/hooks/update.sample
+new file mode 100644
+index 0000000..c4d426b
+--- /dev/null
++++ b/./.git/hooks/update.sample
+@@ -0,0 +1,128 @@
++#!/bin/sh
++#
++# An example hook script to block unannotated tags from entering.
++# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
++#
++# To enable this hook, rename this file to "update".
++#
++# Config
++# ------
++# hooks.allowunannotated
++#   This boolean sets whether unannotated tags will be allowed into the
++#   repository.  By default they won't be.
++# hooks.allowdeletetag
++#   This boolean sets whether deleting tags will be allowed in the
++#   repository.  By default they won't be.
++# hooks.allowmodifytag
++#   This boolean sets whether a tag may be modified after creation. By default
++#   it won't be.
++# hooks.allowdeletebranch
++#   This boolean sets whether deleting branches will be allowed in the
++#   repository.  By default they won't be.
++# hooks.denycreatebranch
++#   This boolean sets whether remotely creating branches will be denied
++#   in the repository.  By default this is allowed.
++#
++
++# --- Command line
++refname="$1"
++oldrev="$2"
++newrev="$3"
++
++# --- Safety check
++if [ -z "$GIT_DIR" ]; then
++	echo "Don't run this script from the command line." >&2
++	echo " (if you want, you could supply GIT_DIR then run" >&2
++	echo "  $0 <ref> <oldrev> <newrev>)" >&2
++	exit 1
++fi
++
++if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
++	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
++	exit 1
++fi
++
++# --- Config
++allowunannotated=$(git config --type=bool hooks.allowunannotated)
++allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
++denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
++allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
++allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
++
++# check for no description
++projectdesc=$(sed -e '1q' "$GIT_DIR/description")
++case "$projectdesc" in
++"Unnamed repository"* | "")
++	echo "*** Project description file hasn't been set" >&2
++	exit 1
++	;;
++esac
++
++# --- Check types
++# if $newrev is 0000...0000, it's a commit to delete a ref.
++zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
++if [ "$newrev" = "$zero" ]; then
++	newrev_type=delete
++else
++	newrev_type=$(git cat-file -t $newrev)
++fi
++
++case "$refname","$newrev_type" in
++	refs/tags/*,commit)
++		# un-annotated tag
++		short_refname=${refname##refs/tags/}
++		if [ "$allowunannotated" != "true" ]; then
++			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
++			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
++			exit 1
++		fi
++		;;
++	refs/tags/*,delete)
++		# delete tag
++		if [ "$allowdeletetag" != "true" ]; then
++			echo "*** Deleting a tag is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	refs/tags/*,tag)
++		# annotated tag
++		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
++		then
++			echo "*** Tag '$refname' already exists." >&2
++			echo "*** Modifying a tag is not allowed in this repository." >&2
++			exit 1
++		fi
++		;;
++	refs/heads/*,commit)
++		# branch
++		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
++			echo "*** Creating a branch is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	refs/heads/*,delete)
++		# delete branch
++		if [ "$allowdeletebranch" != "true" ]; then
++			echo "*** Deleting a branch is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	refs/remotes/*,commit)
++		# tracking branch
++		;;
++	refs/remotes/*,delete)
++		# delete tracking branch
++		if [ "$allowdeletebranch" != "true" ]; then
++			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	*)
++		# Anything else (is there anything else?)
++		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
++		exit 1
++		;;
++esac
++
++# --- Finished
++exit 0
+diff --git a/./.git/index b/./.git/index
+new file mode 100644
+index 0000000..acd272b
+Binary files /dev/null and b/./.git/index differ
+diff --git a/./.git/info/exclude b/./.git/info/exclude
+new file mode 100644
+index 0000000..a5196d1
+--- /dev/null
++++ b/./.git/info/exclude
+@@ -0,0 +1,6 @@
++# git ls-files --others --exclude-from=.git/info/exclude
++# Lines that start with '#' are comments.
++# For a project mostly in C, the following would be a good set of
++# exclude patterns (uncomment them if you want to use them):
++# *.[oa]
++# *~
+diff --git a/./.git/logs/HEAD b/./.git/logs/HEAD
+new file mode 100644
+index 0000000..7f3a773
+--- /dev/null
++++ b/./.git/logs/HEAD
+@@ -0,0 +1,2 @@
++0000000000000000000000000000000000000000 f8d61bafff55ba63b6cca060e047d8b93d931db9 lmalashev <leonid.malashev@gmail.com> 1790614583 +0300	commit (initial): Harden Oracle backup scripts
++f8d61bafff55ba63b6cca060e047d8b93d931db9 d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4 lmalashev <leonid.malashev@gmail.com> 1790614625 +0300	commit (amend): Harden Oracle backup scripts
+diff --git a/./.git/logs/refs/heads/main b/./.git/logs/refs/heads/main
+new file mode 100644
+index 0000000..7f3a773
+--- /dev/null
++++ b/./.git/logs/refs/heads/main
+@@ -0,0 +1,2 @@
++0000000000000000000000000000000000000000 f8d61bafff55ba63b6cca060e047d8b93d931db9 lmalashev <leonid.malashev@gmail.com> 1790614583 +0300	commit (initial): Harden Oracle backup scripts
++f8d61bafff55ba63b6cca060e047d8b93d931db9 d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4 lmalashev <leonid.malashev@gmail.com> 1790614625 +0300	commit (amend): Harden Oracle backup scripts
+diff --git a/./.git/logs/refs/remotes/origin/main b/./.git/logs/refs/remotes/origin/main
+new file mode 100644
+index 0000000..765e937
+--- /dev/null
++++ b/./.git/logs/refs/remotes/origin/main
+@@ -0,0 +1 @@
++0000000000000000000000000000000000000000 d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4 lmalashev <leonid.malashev@gmail.com> 1790615894 +0300	update by push
+diff --git a/./.git/objects/19/7216815fae8c35c738edf4faea66b08ef7f40f b/./.git/objects/19/7216815fae8c35c738edf4faea66b08ef7f40f
+new file mode 100644
+index 0000000..23aa4fc
+--- /dev/null
++++ b/./.git/objects/19/7216815fae8c35c738edf4faea66b08ef7f40f
+@@ -0,0 +1,2 @@
++x�P�J�0���v<��� ʂ�nV���� x)i;���$٢o��E�:�a޼y�^�LW�˳9PJ�`��i#ڏ�۪�5�(�E�R7`+w���ep�3���Czl�6�	��%<:PrD�����݉qT]$���^v�J�w��Z��!2��[����&)/_xQ�juM6�_��iP�J�.�7��y ���p���~J�e���"X���~�9���aglp5��K��p��c�oJ�fۊu�gY��7�bkV�:Y�f�c�
++,M�f��X~
+\ No newline at end of file
+diff --git a/./.git/objects/23/2e78c911d3887206ad1804c45b4b4dc7e47c4f b/./.git/objects/23/2e78c911d3887206ad1804c45b4b4dc7e47c4f
+new file mode 100644
+index 0000000..a62f3bc
+Binary files /dev/null and b/./.git/objects/23/2e78c911d3887206ad1804c45b4b4dc7e47c4f differ
+diff --git a/./.git/objects/24/97791bc50ea040ba47095decb1f30a0dad0784 b/./.git/objects/24/97791bc50ea040ba47095decb1f30a0dad0784
+new file mode 100644
+index 0000000..0695185
+Binary files /dev/null and b/./.git/objects/24/97791bc50ea040ba47095decb1f30a0dad0784 differ
+diff --git a/./.git/objects/25/33084527022dd81bb345c7b7bac94dacf1955d b/./.git/objects/25/33084527022dd81bb345c7b7bac94dacf1955d
+new file mode 100644
+index 0000000..c869e18
+Binary files /dev/null and b/./.git/objects/25/33084527022dd81bb345c7b7bac94dacf1955d differ
+diff --git a/./.git/objects/35/a9396bcb2a93ff3eba60d1653e1d2b58746bca b/./.git/objects/35/a9396bcb2a93ff3eba60d1653e1d2b58746bca
+new file mode 100644
+index 0000000..58d8556
+Binary files /dev/null and b/./.git/objects/35/a9396bcb2a93ff3eba60d1653e1d2b58746bca differ
+diff --git a/./.git/objects/3e/dc0de6076fd1f54c1503f7246f17aa52bf1d01 b/./.git/objects/3e/dc0de6076fd1f54c1503f7246f17aa52bf1d01
+new file mode 100644
+index 0000000..cbe6684
+Binary files /dev/null and b/./.git/objects/3e/dc0de6076fd1f54c1503f7246f17aa52bf1d01 differ
+diff --git a/./.git/objects/3f/91d088ee1259b99d3c966320e24783bcdab57e b/./.git/objects/3f/91d088ee1259b99d3c966320e24783bcdab57e
+new file mode 100644
+index 0000000..e146b0c
+Binary files /dev/null and b/./.git/objects/3f/91d088ee1259b99d3c966320e24783bcdab57e differ
+diff --git a/./.git/objects/6a/77238ce3a709f3988686b433cdf9904891f5a9 b/./.git/objects/6a/77238ce3a709f3988686b433cdf9904891f5a9
+new file mode 100644
+index 0000000..8a09944
+Binary files /dev/null and b/./.git/objects/6a/77238ce3a709f3988686b433cdf9904891f5a9 differ
+diff --git a/./.git/objects/6d/28db004a818d06045cce3bc2138506bf912407 b/./.git/objects/6d/28db004a818d06045cce3bc2138506bf912407
+new file mode 100644
+index 0000000..87df1e2
+Binary files /dev/null and b/./.git/objects/6d/28db004a818d06045cce3bc2138506bf912407 differ
+diff --git a/./.git/objects/99/c49e3984cf8a6e2b72c6608542164f4be3a366 b/./.git/objects/99/c49e3984cf8a6e2b72c6608542164f4be3a366
+new file mode 100644
+index 0000000..8ea9e22
+Binary files /dev/null and b/./.git/objects/99/c49e3984cf8a6e2b72c6608542164f4be3a366 differ
+diff --git a/./.git/objects/a3/1c5cf1bc3f42611c1980092aa6b9aebe23310b b/./.git/objects/a3/1c5cf1bc3f42611c1980092aa6b9aebe23310b
+new file mode 100644
+index 0000000..d1a7f44
+Binary files /dev/null and b/./.git/objects/a3/1c5cf1bc3f42611c1980092aa6b9aebe23310b differ
+diff --git a/./.git/objects/ac/7ac130bb62d55b53a70285b8282ca373be82db b/./.git/objects/ac/7ac130bb62d55b53a70285b8282ca373be82db
+new file mode 100644
+index 0000000..4578ffc
+Binary files /dev/null and b/./.git/objects/ac/7ac130bb62d55b53a70285b8282ca373be82db differ
+diff --git a/./.git/objects/d6/2c055cfb9b35319c850796626e997514f72ffb b/./.git/objects/d6/2c055cfb9b35319c850796626e997514f72ffb
+new file mode 100644
+index 0000000..b95439b
+Binary files /dev/null and b/./.git/objects/d6/2c055cfb9b35319c850796626e997514f72ffb differ
+diff --git a/./.git/objects/d9/d0cb96f763d8a30e00bc2e469eb3568a64a2c4 b/./.git/objects/d9/d0cb96f763d8a30e00bc2e469eb3568a64a2c4
+new file mode 100644
+index 0000000..84d1cb1
+--- /dev/null
++++ b/./.git/objects/d9/d0cb96f763d8a30e00bc2e469eb3568a64a2c4
+@@ -0,0 +1,2 @@
++x��A� @Qלb�&�P�Hb�Kw�a��6Bi(��v�p��ԠGuh�z��u��L�ѓ��L���C!a����mm,R�D��o8'.��_�>3M�%_@Z������
++Q�u�6�z�čj��Bb�^�k���V�C�
+\ No newline at end of file
+diff --git a/./.git/objects/f1/0b931128a7dfdcb94d8dfc2e1330385c67cefe b/./.git/objects/f1/0b931128a7dfdcb94d8dfc2e1330385c67cefe
+new file mode 100644
+index 0000000..03f9f6d
+Binary files /dev/null and b/./.git/objects/f1/0b931128a7dfdcb94d8dfc2e1330385c67cefe differ
+diff --git a/./.git/objects/f8/d61bafff55ba63b6cca060e047d8b93d931db9 b/./.git/objects/f8/d61bafff55ba63b6cca060e047d8b93d931db9
+new file mode 100644
+index 0000000..fc56489
+--- /dev/null
++++ b/./.git/objects/f8/d61bafff55ba63b6cca060e047d8b93d931db9
+@@ -0,0 +1 @@
++x��A�0@Q�=��MH���1.�y��0HcKI)�_6^��[��9�P�h{�E�"w<�g;��Gdt����ޑx1֢���:�1Q�m�\��%���D!6����t�m7X8k��:��V�;�TFY�Y���'~�+l\�Z7�:oC�
+\ No newline at end of file
+diff --git a/./.git/refs/codex/turn-diffs/captures/1790615991798/bddfe213-7ccf-4222-9d11-eddb2408bf6b/base b/./.git/refs/codex/turn-diffs/captures/1790615991798/bddfe213-7ccf-4222-9d11-eddb2408bf6b/base
+new file mode 100644
+index 0000000..5ff0e28
+--- /dev/null
++++ b/./.git/refs/codex/turn-diffs/captures/1790615991798/bddfe213-7ccf-4222-9d11-eddb2408bf6b/base
+@@ -0,0 +1 @@
++2497791bc50ea040ba47095decb1f30a0dad0784
+diff --git a/./.git/refs/heads/main b/./.git/refs/heads/main
+new file mode 100644
+index 0000000..77f0a2d
+--- /dev/null
++++ b/./.git/refs/heads/main
+@@ -0,0 +1 @@
++d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4
+diff --git a/./.git/refs/remotes/origin/main b/./.git/refs/remotes/origin/main
+new file mode 100644
+index 0000000..77f0a2d
+--- /dev/null
++++ b/./.git/refs/remotes/origin/main
+@@ -0,0 +1 @@
++d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4
 diff --git a/./DEPLOYMENT.md b/./DEPLOYMENT.md
 new file mode 100644
-index 0000000..ac7ac13
+index 0000000..6d28db0
 --- /dev/null
 +++ b/./DEPLOYMENT.md
-@@ -0,0 +1,101 @@
-+# Встановлення на 192.168.56.11
+@@ -0,0 +1,47 @@
++# Deployment Notes
 +
-+Користувач: oracle. База: orcl (Oracle 19.31).
-+Скрипти: /home/oracle/dba-scripts/oracle-backup
-+Резервні копії: /u01/app/oracle/backups/orcl
-+Журнали: /u01/app/oracle/backups/logs
++Production host: `oracle@192.168.56.11`.
 +
-+На сервері встановлено п'ять файлів цього проєкту з закінченнями рядків LF.
-+У серверних конфігураціях замінено старий шлях на /u01/app/oracle/backups.
-+Для безпечного першого запуску закоментовано CROSSCHECK та DELETE NOPROMPT,
-+а DELETE INPUT прибрано: наявні копії та архівні журнали не видаляються.
-+Локальні вихідні скрипти й конфігурації залишено без змін.
-+Автоматичний розклад не встановлено. Без політики очищення копії накопичуються.
++Production script directory:
 +
-+Запуск під oracle (значення task: database-i0, database-i1, archivelog, restore_validate):
++```text
++/home/oracle/oracle-backup
++```
++
++Backup and log directories remain outside the script directory:
++
++```text
++/u01/app/oracle/backups/orcl
++/u01/app/oracle/backups/logs
++```
++
++The previous script directory `/home/oracle/dba-scripts/oracle-backup` was moved to `/home/oracle/oracle-backup`.
++
++Use only long options. Options with values must use `--option=value` syntax.
++
++Cron-style archivelog example:
 +
 +```bash
-+task=database-i0
-+/home/oracle/dba-scripts/oracle-backup/job-runner.sh \
-+  --logs-dir /u01/app/oracle/backups/logs \
-+  --job-name "orcl-$task" \
-+  --job-script rman-backup.sh \
-+  --job-args "--sid orcl --task $task --logs-dir /u01/app/oracle/backups/logs --base-backup-dir /u01/app/oracle/backups"
++cd /home/oracle/oracle-backup
++./job-runner.sh \
++  --silent \
++  --job-name=orcl-archivelog \
++  --job-script=rman-backup.sh \
++  --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
++  --logs-dir=/u01/app/oracle/backups/logs
 +```
 +
-+```
-+task=archivelog
-+/home/oracle/dba-scripts/oracle-backup/job-runner.sh --help
++See `README.md` for usage, logging, locking, dry-run behavior, diagnostics, and tests.
 +
-+task=archivelog
-+/home/oracle/dba-scripts/oracle-backup/rman-backup.sh --help
++## Last Verified
 +
-+task=archivelog
-+/home/oracle/dba-scripts/oracle-backup/rman-backup.sh --sid orcl --task $task --logs-dir /u01/app/oracle/backups/logs --base-backup-dir /u01/app/oracle/backups
++After moving to `/home/oracle/oracle-backup`, both checks succeeded:
++
++- `--dry-run`: `0`
++- real `archivelog` run: `0`
++
++Latest verified RMAN log at the time of the move:
++
++```text
++/u01/app/oracle/backups/logs/al_2026-09-28T195149.log
 +```
+diff --git a/./README.md b/./README.md
+new file mode 100644
+index 0000000..d62c055
+--- /dev/null
++++ b/./README.md
+@@ -0,0 +1,173 @@
++# Oracle RMAN Backup Scripts
++
++Bash scripts for Oracle RMAN backups on the Oracle host.
++
++Production script directory:
++
++```text
++/home/oracle/oracle-backup
++```
++
++Backup files and logs stay outside the script directory:
++
++```text
++/u01/app/oracle/backups/orcl
++/u01/app/oracle/backups/logs
++```
++
++## Files
++
++- `job-runner.sh` - wrapper for scheduled jobs, locking, signal handling, and cron-friendly logging.
++- `rman-backup.sh` - RMAN launcher that generates the RMAN script and runs RMAN.
++- `rman-backup.conf` - common RMAN templates and defaults.
++- `rman-backup.<sid>.conf` - per-database overrides, for example `rman-backup.orcl.conf`.
++- `job-runner.conf` - runner environment settings.
++- `tests/` - Linux integration tests with fake RMAN/Oracle tools.
++
++## Command Line Rules
++
++Only long options are supported. Options with values must use `=`:
 +
 +```bash
-+task=archivelog
-+/home/oracle/dba-scripts/oracle-backup/job-runner.sh \
-+  --logs-dir /u01/app/oracle/backups/logs \
-+  --job-name test \
-+  --job-script rman-backup.sh \
-+  --job-args "--sid orcl --task $task --logs-dir /u01/app/oracle/backups/logs --base-backup-dir /u01/app/oracle/backups"
++--sid=orcl
++--task=archivelog
++--base-backup-dir=/u01/app/oracle/backups
++--logs-dir=/u01/app/oracle/backups/logs
 +```
 +
-+restore_validate читає резервні копії для перевірки без перезапису робочої бази.
-+Ця перевірка не замінює повного пробного відновлення в окрему базу.
-+## Результати тестування 2026-09-28
++The space form is intentionally rejected:
 +
-+Усі завдання запущено через job-runner.sh, кожне завершилося з кодом 0.
-+Час наведено за годинником віртуальної машини.
++```bash
++--sid orcl
++```
 +
-+| Завдання | Початок | Завершення | Результат |
-+| --- | --- | --- | --- |
-+| database-i0 | 16:06:57 | 16:13:02 | Успішно |
-+| database-i1 | 16:13:24 | 16:14:56 | Успішно |
-+| archivelog | 16:14:56 | 16:15:06 | Успішно |
-+| restore_validate | 16:15:06 | 16:19:04 | Успішно |
++Short options such as `-s`, `-t`, `-n`, `-j`, `-p`, and `-h` are not supported.
 +
-+У журналах немає повідомлень RMAN-xxxxx або ORA-xxxxx.
-+RESTORE DATABASE VALIDATE, перевірки SPFILE та CONTROLFILE з AUTOBACKUP успішні.
-+Автокопії SPFILE та CONTROLFILE перевірено в наявній recovery area +FRA.
-+Повного відновлення в окрему базу та перевірки RESTORE ARCHIVELOG не виконували.
-+Обсяг тестових резервних копій приблизно 3 ГБ.
++## Tasks
 +
-+## Оновлення блокування завдань 2026-09-28
++Supported RMAN tasks:
 +
-+На сервер розгорнуто оновлений `job-runner.sh`: атомарне блокування через
-+`flock` замість PID-файлів та `eval`. Потрібні Linux, `flock` з util-linux
-+і GNU `stat`. Блокування окреме для кожного `--job-name` у межах користувача.
-+Імена можуть містити латинські літери, цифри, `_`, `-`, `.`, але не можуть
-+починатися з `-` або `.`.
++- `database-i0`
++- `database-i1`
++- `archivelog`
++- `restore_validate`
 +
-+Файли блокування зберігаються у `$HOME/.job-runner-locks` (власник — користувач
-+запуску, права каталогу `700`). Їх не потрібно видаляти: блокування знімає ОС
-+після закриття дескрипторів. Дочірнє завдання успадковує дескриптор блокування,
-+тому загибель обгортки не дозволяє запустити дублікат, поки завдання працює.
-+Старі `/tmp/job-runner.*.pid` не читаються та не впливають на запуск.
-+Повторний виклик активного завдання записує попередження й повертає код `0`.
++## Direct RMAN Wrapper Usage
 +
-+Попередня серверна версія збережена у
-+`/home/oracle/dba-scripts/oracle-backup/.deploy-locks-20260928-01/previous-job-runner.sh`.
-+Решта чотири серверні файли не змінювалися, що підтверджено SHA-256.
-+SHA-256 встановленого `job-runner.sh`:
-+`cd59925b6d53321e3e83c54e6772287df2baec4a86d7f9b5b3a4d4d924d89414`.
++```bash
++cd /home/oracle/oracle-backup
++./rman-backup.sh \
++  --sid=orcl \
++  --task=archivelog \
++  --base-backup-dir=/u01/app/oracle/backups \
++  --logs-dir=/u01/app/oracle/backups/logs
++```
 +
-+Ізольовані тести `tests/job-runner-locks.sh` пройшли на Linux-сервері перед
-+заміною та після встановлення скрипту:
++## Scheduled/Cron Usage
 +
-+- Ігнорування підробленого старого PID-файлу без виконання його вмісту.
-+- Рівно одне дочірнє завдання при 12 одночасних викликах.
-+- Збереження коду помилки дочірнього завдання та можливість наступного запуску.
-+- Збереження блокування дочірнім процесом після `SIGKILL` обгортки й звільнення після завершення дитини.
-+- Відхилення символічного посилання замість lock-файлу.
-+- Відхилення імені завдання зі спробою виходу за межі каталогу.
++Use `job-runner.sh` for cron. It applies locking and forwards signals to the child process.
 +
-+Реальне завдання `orcl-archivelog` через встановлений скрипт виконано
-+16:47:08–16:47:23 за годинником сервера, код завершення `0`.
-+Створено копію архівних журналів sequence 55–56 та AUTOBACKUP CONTROLFILE/SPFILE.
-+Журнал `/u01/app/oracle/backups/logs/al_2026-09-28T164708.log` не містить
-+помилок RMAN/ORA; після завершення блокування вільне.
++```bash
++cd /home/oracle/oracle-backup
++./job-runner.sh \
++  --silent \
++  --job-name=orcl-archivelog \
++  --job-script=rman-backup.sh \
++  --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
++  --logs-dir=/u01/app/oracle/backups/logs
++```
++
++`--silent` suppresses routine success messages in wrapper logs. Errors are still logged.
++
++## Dry Run
++
++`--dry-run` prints the command and generated RMAN script without running RMAN or deleting files.
++
++```bash
++cd /home/oracle/oracle-backup
++./job-runner.sh \
++  --dry-run \
++  --job-name=orcl-archivelog \
++  --job-script=rman-backup.sh \
++  --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
++  --logs-dir=/u01/app/oracle/backups/logs
++```
++
++Dry-run temporary files are intentionally retained so the generated RMAN script can be inspected.
++
++## Locking
++
++`job-runner.sh` uses `flock` and stores lock files in:
++
++```text
++$HOME/.job-runner-locks
++```
++
++For `rman-backup.sh`, the lock key is derived from SID and task:
++
++```text
++rman-backup.<SID>.<task>
++```
++
++This means:
++
++- the same `SID + task` does not run twice at the same time;
++- different SIDs can run in parallel;
++- different tasks for the same SID can run in parallel.
++
++Legacy PID files are not used.
++
++## Logs
++
++Wrapper logs:
++
++```text
++/u01/app/oracle/backups/logs/job-runner.sh.log
++/u01/app/oracle/backups/logs/rman-backup.sh.log
++```
++
++The format is syslog-like with `key=value` payloads:
++
++```text
++Sep 28 19:40:28 orcl1 rman-backup.sh[39696]: start sid=orcl task=archivelog base_backup_dir=/u01/app/oracle/backups logs_dir=/u01/app/oracle/backups/logs config=./rman-backup.conf sid_config=./rman-backup.orcl.conf
++Sep 28 19:40:39 orcl1 rman-backup.sh[39696]: finish sid=orcl task=archivelog status=0 signal=none phase=log-retention
++```
++
++Per-RMAN logs are still written as `*.log`, for example:
++
++```text
++/u01/app/oracle/backups/logs/al_2026-09-28T195149.log
++```
++
++## Diagnostics
++
++Successful real backups do not leave `rman-*` diagnostic directories.
++
++Diagnostics directories are kept only for failures, signals, or cleanup errors. They contain:
++
++- `rman.scr`
++- `rman.log`
++- `rman.out`
++- `status.txt`
++
++`--dry-run` keeps its temporary directory by design.
++
++## Configuration
++
++Common RMAN templates live in `rman-backup.conf`.
++
++Per-database files, such as `rman-backup.orcl.conf`, should contain only overrides: files-per-set, section size, extra RMAN output, or safety switches.
++
++The current production ORCL config keeps initial-deployment safeguards: crosscheck/delete commands are disabled and `DELETE INPUT` is not used.
++
++## Tests
++
++Run on Linux:
++
++```bash
++cd /home/oracle/oracle-backup/tests
++bash job-runner-locks.sh ../job-runner.sh
++bash bash-errors.sh ..
++```
++
++The tests use fake RMAN/Oracle tools and do not connect to a database.
 diff --git a/./bash-fixes.patch b/./bash-fixes.patch
 new file mode 100644
-index 0000000..e69de29
+index 0000000..267cd3d
+--- /dev/null
++++ b/./bash-fixes.patch
+@@ -0,0 +1,1248 @@
++diff --git a/./.git/COMMIT_EDITMSG b/./.git/COMMIT_EDITMSG
++new file mode 100644
++index 0000000..773ddc8
++--- /dev/null
+++++ b/./.git/COMMIT_EDITMSG
++@@ -0,0 +1 @@
+++Harden Oracle backup scripts
++diff --git a/./.git/HEAD b/./.git/HEAD
++new file mode 100644
++index 0000000..b870d82
++--- /dev/null
+++++ b/./.git/HEAD
++@@ -0,0 +1 @@
+++ref: refs/heads/main
++diff --git a/./.git/config b/./.git/config
++new file mode 100644
++index 0000000..f249591
++--- /dev/null
+++++ b/./.git/config
++@@ -0,0 +1,16 @@
+++[core]
+++	repositoryformatversion = 0
+++	filemode = false
+++	bare = false
+++	logallrefupdates = true
+++	symlinks = false
+++	ignorecase = true
+++[user]
+++	name = lmalashev
+++	email = leonid.malashev@gmail.com
+++[remote "origin"]
+++	url = git@github.com:leonidmalashev/oracle-backup.git
+++	fetch = +refs/heads/*:refs/remotes/origin/*
+++[branch "main"]
+++	remote = origin
+++	merge = refs/heads/main
++diff --git a/./.git/description b/./.git/description
++new file mode 100644
++index 0000000..498b267
++--- /dev/null
+++++ b/./.git/description
++@@ -0,0 +1 @@
+++Unnamed repository; edit this file 'description' to name the repository.
++diff --git a/./.git/hooks/applypatch-msg.sample b/./.git/hooks/applypatch-msg.sample
++new file mode 100644
++index 0000000..a5d7b84
++--- /dev/null
+++++ b/./.git/hooks/applypatch-msg.sample
++@@ -0,0 +1,15 @@
+++#!/bin/sh
+++#
+++# An example hook script to check the commit log message taken by
+++# applypatch from an e-mail message.
+++#
+++# The hook should exit with non-zero status after issuing an
+++# appropriate message if it wants to stop the commit.  The hook is
+++# allowed to edit the commit message file.
+++#
+++# To enable this hook, rename this file to "applypatch-msg".
+++
+++. git-sh-setup
+++commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
+++test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
+++:
++diff --git a/./.git/hooks/commit-msg.sample b/./.git/hooks/commit-msg.sample
++new file mode 100644
++index 0000000..f7458ef
++--- /dev/null
+++++ b/./.git/hooks/commit-msg.sample
++@@ -0,0 +1,74 @@
+++#!/bin/sh
+++#
+++# An example hook script to check the commit log message.
+++# Called by "git commit" with one argument, the name of the file
+++# that has the commit message.  The hook should exit with non-zero
+++# status after issuing an appropriate message if it wants to stop the
+++# commit.  The hook is allowed to edit the commit message file.
+++#
+++# To enable this hook, rename this file to "commit-msg".
+++
+++# Uncomment the below to add a Signed-off-by line to the message.
+++# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
+++# hook is more suited to it.
+++#
+++# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+++# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
+++
+++# This example catches duplicate Signed-off-by lines and messages that
+++# would confuse 'git am'.
+++
+++ret=0
+++
+++test "" = "$(grep '^Signed-off-by: ' "$1" |
+++	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
+++	echo >&2 Duplicate Signed-off-by lines.
+++	ret=1
+++}
+++
+++comment_re="$(
+++	{
+++		git config --get-regexp "^core\.comment(char|string)\$" ||
+++			echo '#'
+++	} | sed -n -e '
+++		${
+++			s/^[^ ]* //
+++			s|[][*./\]|\\&|g
+++			s/^auto$/[#;@!$%^&|:]/
+++			p
+++		}'
+++)"
+++scissors_line="^${comment_re} -\{8,\} >8 -\{8,\}\$"
+++comment_line="^${comment_re}.*"
+++blank_line='^[ 	]*$'
+++# Disallow lines starting with "diff -" or "Index: " in the body of the
+++# message. Stop looking if we see a scissors line.
+++line="$(sed -n -e "
+++	# Skip comments and blank lines at the start of the file.
+++	/${scissors_line}/q
+++	/${comment_line}/d
+++	/${blank_line}/d
+++	# The first paragraph will become the subject header so
+++	# does not need to be checked.
+++	: subject
+++	n
+++	/${scissors_line}/q
+++	/${blank_line}/!b subject
+++	# Check the body of the message for problematic
+++	# prefixes.
+++	: body
+++	n
+++	/${scissors_line}/q
+++	/${comment_line}/b body
+++	/^diff -/{p;q;}
+++	/^Index: /{p;q;}
+++	b body
+++	" "$1")"
+++if test -n "$line"
+++then
+++	echo >&2 "Message contains a diff that will confuse 'git am'."
+++	echo >&2 "To fix this indent the diff."
+++	ret=1
+++fi
+++
+++exit $ret
++diff --git a/./.git/hooks/fsmonitor-watchman.sample b/./.git/hooks/fsmonitor-watchman.sample
++new file mode 100644
++index 0000000..429e0a5
++--- /dev/null
+++++ b/./.git/hooks/fsmonitor-watchman.sample
++@@ -0,0 +1,168 @@
+++#!/usr/bin/perl
+++
+++use strict;
+++use warnings;
+++use IPC::Open2;
+++
+++# An example hook script to integrate Watchman
+++# (https://facebook.github.io/watchman/) with git to speed up detecting
+++# new and modified files.
+++#
+++# The hook is passed a version (currently 2) and last update token
+++# formatted as a string and outputs to stdout a new update token and
+++# all files that have been modified since the update token. Paths must
+++# be relative to the root of the working tree and separated by a single NUL.
+++#
+++# To enable this hook, rename this file to "query-watchman" and set
+++# 'git config core.fsmonitor .git/hooks/query-watchman'
+++#
+++my ($version, $last_update_token) = @ARGV;
+++
+++# Uncomment for debugging
+++# print STDERR "$0 $version $last_update_token\n";
+++
+++# Check the hook interface version
+++if ($version ne 2) {
+++	die "Unsupported query-fsmonitor hook version '$version'.\n" .
+++	    "Falling back to scanning...\n";
+++}
+++
+++my $git_work_tree = get_working_dir();
+++
+++my $json_pkg;
+++eval {
+++	require JSON::XS;
+++	$json_pkg = "JSON::XS";
+++	1;
+++} or do {
+++	require JSON::PP;
+++	$json_pkg = "JSON::PP";
+++};
+++
+++launch_watchman();
+++
+++sub launch_watchman {
+++	my $o = watchman_query();
+++	if (is_work_tree_watched($o)) {
+++		output_result($o->{clock}, @{$o->{files}});
+++	}
+++}
+++
+++sub output_result {
+++	my ($clockid, @files) = @_;
+++
+++	# Uncomment for debugging watchman output
+++	# open (my $fh, ">", ".git/watchman-output.out");
+++	# binmode $fh, ":utf8";
+++	# print $fh "$clockid\n@files\n";
+++	# close $fh;
+++
+++	binmode STDOUT, ":utf8";
+++	print $clockid;
+++	print "\0";
+++	local $, = "\0";
+++	print @files;
+++}
+++
+++sub watchman_clock {
+++	my $response = qx/watchman clock "$git_work_tree"/;
+++	die "Failed to get clock id on '$git_work_tree'.\n" .
+++		"Falling back to scanning...\n" if $? != 0;
+++
+++	return $json_pkg->new->utf8->decode($response);
+++}
+++
+++sub watchman_query {
+++	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
+++	or die "open2() failed: $!\n" .
+++	"Falling back to scanning...\n";
+++
+++	# In the query expression below we're asking for names of files that
+++	# changed since $last_update_token but not from the .git folder.
+++	#
+++	# To accomplish this, we're using the "since" generator to use the
+++	# recency index to select candidate nodes and "fields" to limit the
+++	# output to file names only. Then we're using the "expression" term to
+++	# further constrain the results.
+++	my $last_update_line = "";
+++	if (substr($last_update_token, 0, 1) eq "c") {
+++		$last_update_token = "\"$last_update_token\"";
+++		$last_update_line = qq[\n"since": $last_update_token,];
+++	}
+++	my $query = <<"	END";
+++		["query", "$git_work_tree", {$last_update_line
+++			"fields": ["name"],
+++			"expression": ["not", ["dirname", ".git"]]
+++		}]
+++	END
+++
+++	# Uncomment for debugging the watchman query
+++	# open (my $fh, ">", ".git/watchman-query.json");
+++	# print $fh $query;
+++	# close $fh;
+++
+++	print CHLD_IN $query;
+++	close CHLD_IN;
+++	my $response = do {local $/; <CHLD_OUT>};
+++
+++	# Uncomment for debugging the watch response
+++	# open ($fh, ">", ".git/watchman-response.json");
+++	# print $fh $response;
+++	# close $fh;
+++
+++	die "Watchman: command returned no output.\n" .
+++	"Falling back to scanning...\n" if $response eq "";
+++	die "Watchman: command returned invalid output: $response\n" .
+++	"Falling back to scanning...\n" unless $response =~ /^\{/;
+++
+++	return $json_pkg->new->utf8->decode($response);
+++}
+++
+++sub is_work_tree_watched {
+++	my ($output) = @_;
+++	my $error = $output->{error};
+++	if ($error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
+++		my $response = qx/watchman watch "$git_work_tree"/;
+++		die "Failed to make watchman watch '$git_work_tree'.\n" .
+++		    "Falling back to scanning...\n" if $? != 0;
+++		$output = $json_pkg->new->utf8->decode($response);
+++		$error = $output->{error};
+++		die "Watchman: $error.\n" .
+++		"Falling back to scanning...\n" if $error;
+++
+++		# Uncomment for debugging watchman output
+++		# open (my $fh, ">", ".git/watchman-output.out");
+++		# close $fh;
+++
+++		# Watchman will always return all files on the first query so
+++		# return the fast "everything is dirty" flag to git and do the
+++		# Watchman query just to get it over with now so we won't pay
+++		# the cost in git to look up each individual file.
+++		my $o = watchman_clock();
+++		$error = $o->{error};
+++
+++		die "Watchman: $error.\n" .
+++		"Falling back to scanning...\n" if $error;
+++
+++		output_result($o->{clock}, ("/"));
+++		return 0;
+++	}
+++
+++	die "Watchman: $error.\n" .
+++	"Falling back to scanning...\n" if $error;
+++
+++	return 1;
+++}
+++
+++sub get_working_dir {
+++	my $working_dir;
+++	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
+++		$working_dir = Win32::GetCwd();
+++		$working_dir =~ tr/\\/\//;
+++	} else {
+++		require Cwd;
+++		$working_dir = Cwd::cwd();
+++	}
+++
+++	return $working_dir;
+++}
++diff --git a/./.git/hooks/post-update.sample b/./.git/hooks/post-update.sample
++new file mode 100644
++index 0000000..ec17ec1
++--- /dev/null
+++++ b/./.git/hooks/post-update.sample
++@@ -0,0 +1,8 @@
+++#!/bin/sh
+++#
+++# An example hook script to prepare a packed repository for use over
+++# dumb transports.
+++#
+++# To enable this hook, rename this file to "post-update".
+++
+++exec git update-server-info
++diff --git a/./.git/hooks/pre-applypatch.sample b/./.git/hooks/pre-applypatch.sample
++new file mode 100644
++index 0000000..4142082
++--- /dev/null
+++++ b/./.git/hooks/pre-applypatch.sample
++@@ -0,0 +1,14 @@
+++#!/bin/sh
+++#
+++# An example hook script to verify what is about to be committed
+++# by applypatch from an e-mail message.
+++#
+++# The hook should exit with non-zero status after issuing an
+++# appropriate message if it wants to stop the commit.
+++#
+++# To enable this hook, rename this file to "pre-applypatch".
+++
+++. git-sh-setup
+++precommit="$(git rev-parse --git-path hooks/pre-commit)"
+++test -x "$precommit" && exec "$precommit" ${1+"$@"}
+++:
++diff --git a/./.git/hooks/pre-commit.sample b/./.git/hooks/pre-commit.sample
++new file mode 100644
++index 0000000..29ed5ee
++--- /dev/null
+++++ b/./.git/hooks/pre-commit.sample
++@@ -0,0 +1,49 @@
+++#!/bin/sh
+++#
+++# An example hook script to verify what is about to be committed.
+++# Called by "git commit" with no arguments.  The hook should
+++# exit with non-zero status after issuing an appropriate message if
+++# it wants to stop the commit.
+++#
+++# To enable this hook, rename this file to "pre-commit".
+++
+++if git rev-parse --verify HEAD >/dev/null 2>&1
+++then
+++	against=HEAD
+++else
+++	# Initial commit: diff against an empty tree object
+++	against=$(git hash-object -t tree /dev/null)
+++fi
+++
+++# If you want to allow non-ASCII filenames set this variable to true.
+++allownonascii=$(git config --type=bool hooks.allownonascii)
+++
+++# Redirect output to stderr.
+++exec 1>&2
+++
+++# Cross platform projects tend to avoid non-ASCII filenames; prevent
+++# them from being added to the repository. We exploit the fact that the
+++# printable range starts at the space character and ends with tilde.
+++if [ "$allownonascii" != "true" ] &&
+++	# Note that the use of brackets around a tr range is ok here, (it's
+++	# even required, for portability to Solaris 10's /usr/bin/tr), since
+++	# the square bracket bytes happen to fall in the designated range.
+++	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
+++	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
+++then
+++	cat <<\EOF
+++Error: Attempt to add a non-ASCII file name.
+++
+++This can cause problems if you want to work with people on other platforms.
+++
+++To be portable it is advisable to rename the file.
+++
+++If you know what you are doing you can disable this check using:
+++
+++  git config hooks.allownonascii true
+++EOF
+++	exit 1
+++fi
+++
+++# If there are whitespace errors, print the offending file names and fail.
+++exec git diff-index --check --cached $against --
++diff --git a/./.git/hooks/pre-merge-commit.sample b/./.git/hooks/pre-merge-commit.sample
++new file mode 100644
++index 0000000..399eab1
++--- /dev/null
+++++ b/./.git/hooks/pre-merge-commit.sample
++@@ -0,0 +1,13 @@
+++#!/bin/sh
+++#
+++# An example hook script to verify what is about to be committed.
+++# Called by "git merge" with no arguments.  The hook should
+++# exit with non-zero status after issuing an appropriate message to
+++# stderr if it wants to stop the merge commit.
+++#
+++# To enable this hook, rename this file to "pre-merge-commit".
+++
+++. git-sh-setup
+++test -x "$GIT_DIR/hooks/pre-commit" &&
+++        exec "$GIT_DIR/hooks/pre-commit"
+++:
++diff --git a/./.git/hooks/pre-push.sample b/./.git/hooks/pre-push.sample
++new file mode 100644
++index 0000000..4ce688d
++--- /dev/null
+++++ b/./.git/hooks/pre-push.sample
++@@ -0,0 +1,53 @@
+++#!/bin/sh
+++
+++# An example hook script to verify what is about to be pushed.  Called by "git
+++# push" after it has checked the remote status, but before anything has been
+++# pushed.  If this script exits with a non-zero status nothing will be pushed.
+++#
+++# This hook is called with the following parameters:
+++#
+++# $1 -- Name of the remote to which the push is being done
+++# $2 -- URL to which the push is being done
+++#
+++# If pushing without using a named remote those arguments will be equal.
+++#
+++# Information about the commits which are being pushed is supplied as lines to
+++# the standard input in the form:
+++#
+++#   <local ref> <local oid> <remote ref> <remote oid>
+++#
+++# This sample shows how to prevent push of commits where the log message starts
+++# with "WIP" (work in progress).
+++
+++remote="$1"
+++url="$2"
+++
+++zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+++
+++while read local_ref local_oid remote_ref remote_oid
+++do
+++	if test "$local_oid" = "$zero"
+++	then
+++		# Handle delete
+++		:
+++	else
+++		if test "$remote_oid" = "$zero"
+++		then
+++			# New branch, examine all commits
+++			range="$local_oid"
+++		else
+++			# Update to existing branch, examine new commits
+++			range="$remote_oid..$local_oid"
+++		fi
+++
+++		# Check for WIP commit
+++		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
+++		if test -n "$commit"
+++		then
+++			echo >&2 "Found WIP commit in $local_ref, not pushing"
+++			exit 1
+++		fi
+++	fi
+++done
+++
+++exit 0
++diff --git a/./.git/hooks/pre-rebase.sample b/./.git/hooks/pre-rebase.sample
++new file mode 100644
++index 0000000..6cbef5c
++--- /dev/null
+++++ b/./.git/hooks/pre-rebase.sample
++@@ -0,0 +1,169 @@
+++#!/bin/sh
+++#
+++# Copyright (c) 2006, 2008 Junio C Hamano
+++#
+++# The "pre-rebase" hook is run just before "git rebase" starts doing
+++# its job, and can prevent the command from running by exiting with
+++# non-zero status.
+++#
+++# The hook is called with the following parameters:
+++#
+++# $1 -- the upstream the series was forked from.
+++# $2 -- the branch being rebased (or empty when rebasing the current branch).
+++#
+++# This sample shows how to prevent topic branches that are already
+++# merged to 'next' branch from getting rebased, because allowing it
+++# would result in rebasing already published history.
+++
+++publish=next
+++basebranch="$1"
+++if test "$#" = 2
+++then
+++	topic="refs/heads/$2"
+++else
+++	topic=`git symbolic-ref HEAD` ||
+++	exit 0 ;# we do not interrupt rebasing detached HEAD
+++fi
+++
+++case "$topic" in
+++refs/heads/??/*)
+++	;;
+++*)
+++	exit 0 ;# we do not interrupt others.
+++	;;
+++esac
+++
+++# Now we are dealing with a topic branch being rebased
+++# on top of master.  Is it OK to rebase it?
+++
+++# Does the topic really exist?
+++git show-ref -q "$topic" || {
+++	echo >&2 "No such branch $topic"
+++	exit 1
+++}
+++
+++# Is topic fully merged to master?
+++not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
+++if test -z "$not_in_master"
+++then
+++	echo >&2 "$topic is fully merged to master; better remove it."
+++	exit 1 ;# we could allow it, but there is no point.
+++fi
+++
+++# Is topic ever merged to next?  If so you should not be rebasing it.
+++only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
+++only_next_2=`git rev-list ^master           ${publish} | sort`
+++if test "$only_next_1" = "$only_next_2"
+++then
+++	not_in_topic=`git rev-list "^$topic" master`
+++	if test -z "$not_in_topic"
+++	then
+++		echo >&2 "$topic is already up to date with master"
+++		exit 1 ;# we could allow it, but there is no point.
+++	else
+++		exit 0
+++	fi
+++else
+++	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
+++	/usr/bin/perl -e '
+++		my $topic = $ARGV[0];
+++		my $msg = "* $topic has commits already merged to public branch:\n";
+++		my (%not_in_next) = map {
+++			/^([0-9a-f]+) /;
+++			($1 => 1);
+++		} split(/\n/, $ARGV[1]);
+++		for my $elem (map {
+++				/^([0-9a-f]+) (.*)$/;
+++				[$1 => $2];
+++			} split(/\n/, $ARGV[2])) {
+++			if (!exists $not_in_next{$elem->[0]}) {
+++				if ($msg) {
+++					print STDERR $msg;
+++					undef $msg;
+++				}
+++				print STDERR " $elem->[1]\n";
+++			}
+++		}
+++	' "$topic" "$not_in_next" "$not_in_master"
+++	exit 1
+++fi
+++
+++<<\DOC_END
+++
+++This sample hook safeguards topic branches that have been
+++published from being rewound.
+++
+++The workflow assumed here is:
+++
+++ * Once a topic branch forks from "master", "master" is never
+++   merged into it again (either directly or indirectly).
+++
+++ * Once a topic branch is fully cooked and merged into "master",
+++   it is deleted.  If you need to build on top of it to correct
+++   earlier mistakes, a new topic branch is created by forking at
+++   the tip of the "master".  This is not strictly necessary, but
+++   it makes it easier to keep your history simple.
+++
+++ * Whenever you need to test or publish your changes to topic
+++   branches, merge them into "next" branch.
+++
+++The script, being an example, hardcodes the publish branch name
+++to be "next", but it is trivial to make it configurable via
+++$GIT_DIR/config mechanism.
+++
+++With this workflow, you would want to know:
+++
+++(1) ... if a topic branch has ever been merged to "next".  Young
+++    topic branches can have stupid mistakes you would rather
+++    clean up before publishing, and things that have not been
+++    merged into other branches can be easily rebased without
+++    affecting other people.  But once it is published, you would
+++    not want to rewind it.
+++
+++(2) ... if a topic branch has been fully merged to "master".
+++    Then you can delete it.  More importantly, you should not
+++    build on top of it -- other people may already want to
+++    change things related to the topic as patches against your
+++    "master", so if you need further changes, it is better to
+++    fork the topic (perhaps with the same name) afresh from the
+++    tip of "master".
+++
+++Let's look at this example:
+++
+++		   o---o---o---o---o---o---o---o---o---o "next"
+++		  /       /           /           /
+++		 /   a---a---b A     /           /
+++		/   /               /           /
+++	       /   /   c---c---c---c B         /
+++	      /   /   /             \         /
+++	     /   /   /   b---b C     \       /
+++	    /   /   /   /             \     /
+++    ---o---o---o---o---o---o---o---o---o---o---o "master"
+++
+++
+++A, B and C are topic branches.
+++
+++ * A has one fix since it was merged up to "next".
+++
+++ * B has finished.  It has been fully merged up to "master" and "next",
+++   and is ready to be deleted.
+++
+++ * C has not merged to "next" at all.
+++
+++We would want to allow C to be rebased, refuse A, and encourage
+++B to be deleted.
+++
+++To compute (1):
+++
+++	git rev-list ^master ^topic next
+++	git rev-list ^master        next
+++
+++	if these match, topic has not merged in next at all.
+++
+++To compute (2):
+++
+++	git rev-list master..topic
+++
+++	if this is empty, it is fully merged to "master".
+++
+++DOC_END
++diff --git a/./.git/hooks/pre-receive.sample b/./.git/hooks/pre-receive.sample
++new file mode 100644
++index 0000000..a1fd29e
++--- /dev/null
+++++ b/./.git/hooks/pre-receive.sample
++@@ -0,0 +1,24 @@
+++#!/bin/sh
+++#
+++# An example hook script to make use of push options.
+++# The example simply echoes all push options that start with 'echoback='
+++# and rejects all pushes when the "reject" push option is used.
+++#
+++# To enable this hook, rename this file to "pre-receive".
+++
+++if test -n "$GIT_PUSH_OPTION_COUNT"
+++then
+++	i=0
+++	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
+++	do
+++		eval "value=\$GIT_PUSH_OPTION_$i"
+++		case "$value" in
+++		echoback=*)
+++			echo "echo from the pre-receive-hook: ${value#*=}" >&2
+++			;;
+++		reject)
+++			exit 1
+++		esac
+++		i=$((i + 1))
+++	done
+++fi
++diff --git a/./.git/hooks/prepare-commit-msg.sample b/./.git/hooks/prepare-commit-msg.sample
++new file mode 100644
++index 0000000..10fa14c
++--- /dev/null
+++++ b/./.git/hooks/prepare-commit-msg.sample
++@@ -0,0 +1,42 @@
+++#!/bin/sh
+++#
+++# An example hook script to prepare the commit log message.
+++# Called by "git commit" with the name of the file that has the
+++# commit message, followed by the description of the commit
+++# message's source.  The hook's purpose is to edit the commit
+++# message file.  If the hook fails with a non-zero status,
+++# the commit is aborted.
+++#
+++# To enable this hook, rename this file to "prepare-commit-msg".
+++
+++# This hook includes three examples. The first one removes the
+++# "# Please enter the commit message..." help message.
+++#
+++# The second includes the output of "git diff --name-status -r"
+++# into the message, just before the "git status" output.  It is
+++# commented because it doesn't cope with --amend or with squashed
+++# commits.
+++#
+++# The third example adds a Signed-off-by line to the message, that can
+++# still be edited.  This is rarely a good idea.
+++
+++COMMIT_MSG_FILE=$1
+++COMMIT_SOURCE=$2
+++SHA1=$3
+++
+++/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
+++
+++# case "$COMMIT_SOURCE,$SHA1" in
+++#  ,|template,)
+++#    /usr/bin/perl -i.bak -pe '
+++#       print "\n" . `git diff --cached --name-status -r`
+++# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
+++#  *) ;;
+++# esac
+++
+++# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+++# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
+++# if test -z "$COMMIT_SOURCE"
+++# then
+++#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
+++# fi
++diff --git a/./.git/hooks/push-to-checkout.sample b/./.git/hooks/push-to-checkout.sample
++new file mode 100644
++index 0000000..af5a0c0
++--- /dev/null
+++++ b/./.git/hooks/push-to-checkout.sample
++@@ -0,0 +1,78 @@
+++#!/bin/sh
+++
+++# An example hook script to update a checked-out tree on a git push.
+++#
+++# This hook is invoked by git-receive-pack(1) when it reacts to git
+++# push and updates reference(s) in its repository, and when the push
+++# tries to update the branch that is currently checked out and the
+++# receive.denyCurrentBranch configuration variable is set to
+++# updateInstead.
+++#
+++# By default, such a push is refused if the working tree and the index
+++# of the remote repository has any difference from the currently
+++# checked out commit; when both the working tree and the index match
+++# the current commit, they are updated to match the newly pushed tip
+++# of the branch. This hook is to be used to override the default
+++# behaviour; however the code below reimplements the default behaviour
+++# as a starting point for convenient modification.
+++#
+++# The hook receives the commit with which the tip of the current
+++# branch is going to be updated:
+++commit=$1
+++
+++# It can exit with a non-zero status to refuse the push (when it does
+++# so, it must not modify the index or the working tree).
+++die () {
+++	echo >&2 "$*"
+++	exit 1
+++}
+++
+++# Or it can make any necessary changes to the working tree and to the
+++# index to bring them to the desired state when the tip of the current
+++# branch is updated to the new commit, and exit with a zero status.
+++#
+++# For example, the hook can simply run git read-tree -u -m HEAD "$1"
+++# in order to emulate git fetch that is run in the reverse direction
+++# with git push, as the two-tree form of git read-tree -u -m is
+++# essentially the same as git switch or git checkout that switches
+++# branches while keeping the local changes in the working tree that do
+++# not interfere with the difference between the branches.
+++
+++# The below is a more-or-less exact translation to shell of the C code
+++# for the default behaviour for git's push-to-checkout hook defined in
+++# the push_to_deploy() function in builtin/receive-pack.c.
+++#
+++# Note that the hook will be executed from the repository directory,
+++# not from the working tree, so if you want to perform operations on
+++# the working tree, you will have to adapt your code accordingly, e.g.
+++# by adding "cd .." or using relative paths.
+++
+++if ! git update-index -q --ignore-submodules --refresh
+++then
+++	die "Up-to-date check failed"
+++fi
+++
+++if ! git diff-files --quiet --ignore-submodules --
+++then
+++	die "Working directory has unstaged changes"
+++fi
+++
+++# This is a rough translation of:
+++#
+++#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
+++if git cat-file -e HEAD 2>/dev/null
+++then
+++	head=HEAD
+++else
+++	head=$(git hash-object -t tree --stdin </dev/null)
+++fi
+++
+++if ! git diff-index --quiet --cached --ignore-submodules $head --
+++then
+++	die "Working directory has staged changes"
+++fi
+++
+++if ! git read-tree -u -m "$commit"
+++then
+++	die "Could not update working tree to new HEAD"
+++fi
++diff --git a/./.git/hooks/sendemail-validate.sample b/./.git/hooks/sendemail-validate.sample
++new file mode 100644
++index 0000000..640bcf8
++--- /dev/null
+++++ b/./.git/hooks/sendemail-validate.sample
++@@ -0,0 +1,77 @@
+++#!/bin/sh
+++
+++# An example hook script to validate a patch (and/or patch series) before
+++# sending it via email.
+++#
+++# The hook should exit with non-zero status after issuing an appropriate
+++# message if it wants to prevent the email(s) from being sent.
+++#
+++# To enable this hook, rename this file to "sendemail-validate".
+++#
+++# By default, it will only check that the patch(es) can be applied on top of
+++# the default upstream branch without conflicts in a secondary worktree. After
+++# validation (successful or not) of the last patch of a series, the worktree
+++# will be deleted.
+++#
+++# The following config variables can be set to change the default remote and
+++# remote ref that are used to apply the patches against:
+++#
+++#   sendemail.validateRemote (default: origin)
+++#   sendemail.validateRemoteRef (default: HEAD)
+++#
+++# Replace the TODO placeholders with appropriate checks according to your
+++# needs.
+++
+++validate_cover_letter () {
+++	file="$1"
+++	# TODO: Replace with appropriate checks (e.g. spell checking).
+++	true
+++}
+++
+++validate_patch () {
+++	file="$1"
+++	# Ensure that the patch applies without conflicts.
+++	git am -3 "$file" || return
+++	# TODO: Replace with appropriate checks for this patch
+++	# (e.g. checkpatch.pl).
+++	true
+++}
+++
+++validate_series () {
+++	# TODO: Replace with appropriate checks for the whole series
+++	# (e.g. quick build, coding style checks, etc.).
+++	true
+++}
+++
+++# main -------------------------------------------------------------------------
+++
+++if test "$GIT_SENDEMAIL_FILE_COUNTER" = 1
+++then
+++	remote=$(git config --default origin --get sendemail.validateRemote) &&
+++	ref=$(git config --default HEAD --get sendemail.validateRemoteRef) &&
+++	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
+++	git worktree add -fd --checkout "$worktree" "refs/remotes/$remote/$ref" &&
+++	git config --replace-all sendemail.validateWorktree "$worktree"
+++else
+++	worktree=$(git config --get sendemail.validateWorktree)
+++fi || {
+++	echo "sendemail-validate: error: failed to prepare worktree" >&2
+++	exit 1
+++}
+++
+++unset GIT_DIR GIT_WORK_TREE
+++cd "$worktree" &&
+++
+++if grep -q "^diff --git " "$1"
+++then
+++	validate_patch "$1"
+++else
+++	validate_cover_letter "$1"
+++fi &&
+++
+++if test "$GIT_SENDEMAIL_FILE_COUNTER" = "$GIT_SENDEMAIL_FILE_TOTAL"
+++then
+++	git config --unset-all sendemail.validateWorktree &&
+++	trap 'git worktree remove -ff "$worktree"' EXIT &&
+++	validate_series
+++fi
++diff --git a/./.git/hooks/update.sample b/./.git/hooks/update.sample
++new file mode 100644
++index 0000000..c4d426b
++--- /dev/null
+++++ b/./.git/hooks/update.sample
++@@ -0,0 +1,128 @@
+++#!/bin/sh
+++#
+++# An example hook script to block unannotated tags from entering.
+++# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
+++#
+++# To enable this hook, rename this file to "update".
+++#
+++# Config
+++# ------
+++# hooks.allowunannotated
+++#   This boolean sets whether unannotated tags will be allowed into the
+++#   repository.  By default they won't be.
+++# hooks.allowdeletetag
+++#   This boolean sets whether deleting tags will be allowed in the
+++#   repository.  By default they won't be.
+++# hooks.allowmodifytag
+++#   This boolean sets whether a tag may be modified after creation. By default
+++#   it won't be.
+++# hooks.allowdeletebranch
+++#   This boolean sets whether deleting branches will be allowed in the
+++#   repository.  By default they won't be.
+++# hooks.denycreatebranch
+++#   This boolean sets whether remotely creating branches will be denied
+++#   in the repository.  By default this is allowed.
+++#
+++
+++# --- Command line
+++refname="$1"
+++oldrev="$2"
+++newrev="$3"
+++
+++# --- Safety check
+++if [ -z "$GIT_DIR" ]; then
+++	echo "Don't run this script from the command line." >&2
+++	echo " (if you want, you could supply GIT_DIR then run" >&2
+++	echo "  $0 <ref> <oldrev> <newrev>)" >&2
+++	exit 1
+++fi
+++
+++if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
+++	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
+++	exit 1
+++fi
+++
+++# --- Config
+++allowunannotated=$(git config --type=bool hooks.allowunannotated)
+++allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
+++denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
+++allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
+++allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
+++
+++# check for no description
+++projectdesc=$(sed -e '1q' "$GIT_DIR/description")
+++case "$projectdesc" in
+++"Unnamed repository"* | "")
+++	echo "*** Project description file hasn't been set" >&2
+++	exit 1
+++	;;
+++esac
+++
+++# --- Check types
+++# if $newrev is 0000...0000, it's a commit to delete a ref.
+++zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+++if [ "$newrev" = "$zero" ]; then
+++	newrev_type=delete
+++else
+++	newrev_type=$(git cat-file -t $newrev)
+++fi
+++
+++case "$refname","$newrev_type" in
+++	refs/tags/*,commit)
+++		# un-annotated tag
+++		short_refname=${refname##refs/tags/}
+++		if [ "$allowunannotated" != "true" ]; then
+++			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
+++			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
+++			exit 1
+++		fi
+++		;;
+++	refs/tags/*,delete)
+++		# delete tag
+++		if [ "$allowdeletetag" != "true" ]; then
+++			echo "*** Deleting a tag is not allowed in this repository" >&2
+++			exit 1
+++		fi
+++		;;
+++	refs/tags/*,tag)
+++		# annotated tag
+++		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
+++		then
+++			echo "*** Tag '$refname' already exists." >&2
+++			echo "*** Modifying a tag is not allowed in this repository." >&2
+++			exit 1
+++		fi
+++		;;
+++	refs/heads/*,commit)
+++		# branch
+++		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
+++			echo "*** Creating a branch is not allowed in this repository" >&2
+++			exit 1
+++		fi
+++		;;
+++	refs/heads/*,delete)
+++		# delete branch
+++		if [ "$allowdeletebranch" != "true" ]; then
+++			echo "*** Deleting a branch is not allowed in this repository" >&2
+++			exit 1
+++		fi
+++		;;
+++	refs/remotes/*,commit)
+++		# tracking branch
+++		;;
+++	refs/remotes/*,delete)
+++		# delete tracking branch
+++		if [ "$allowdeletebranch" != "true" ]; then
+++			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
+++			exit 1
+++		fi
+++		;;
+++	*)
+++		# Anything else (is there anything else?)
+++		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
+++		exit 1
+++		;;
+++esac
+++
+++# --- Finished
+++exit 0
++diff --git a/./.git/index b/./.git/index
++new file mode 100644
++index 0000000..acd272b
++Binary files /dev/null and b/./.git/index differ
++diff --git a/./.git/info/exclude b/./.git/info/exclude
++new file mode 100644
++index 0000000..a5196d1
++--- /dev/null
+++++ b/./.git/info/exclude
++@@ -0,0 +1,6 @@
+++# git ls-files --others --exclude-from=.git/info/exclude
+++# Lines that start with '#' are comments.
+++# For a project mostly in C, the following would be a good set of
+++# exclude patterns (uncomment them if you want to use them):
+++# *.[oa]
+++# *~
++diff --git a/./.git/logs/HEAD b/./.git/logs/HEAD
++new file mode 100644
++index 0000000..7f3a773
++--- /dev/null
+++++ b/./.git/logs/HEAD
++@@ -0,0 +1,2 @@
+++0000000000000000000000000000000000000000 f8d61bafff55ba63b6cca060e047d8b93d931db9 lmalashev <leonid.malashev@gmail.com> 1790614583 +0300	commit (initial): Harden Oracle backup scripts
+++f8d61bafff55ba63b6cca060e047d8b93d931db9 d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4 lmalashev <leonid.malashev@gmail.com> 1790614625 +0300	commit (amend): Harden Oracle backup scripts
++diff --git a/./.git/logs/refs/heads/main b/./.git/logs/refs/heads/main
++new file mode 100644
++index 0000000..7f3a773
++--- /dev/null
+++++ b/./.git/logs/refs/heads/main
++@@ -0,0 +1,2 @@
+++0000000000000000000000000000000000000000 f8d61bafff55ba63b6cca060e047d8b93d931db9 lmalashev <leonid.malashev@gmail.com> 1790614583 +0300	commit (initial): Harden Oracle backup scripts
+++f8d61bafff55ba63b6cca060e047d8b93d931db9 d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4 lmalashev <leonid.malashev@gmail.com> 1790614625 +0300	commit (amend): Harden Oracle backup scripts
++diff --git a/./.git/logs/refs/remotes/origin/main b/./.git/logs/refs/remotes/origin/main
++new file mode 100644
++index 0000000..765e937
++--- /dev/null
+++++ b/./.git/logs/refs/remotes/origin/main
++@@ -0,0 +1 @@
+++0000000000000000000000000000000000000000 d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4 lmalashev <leonid.malashev@gmail.com> 1790615894 +0300	update by push
++diff --git a/./.git/objects/19/7216815fae8c35c738edf4faea66b08ef7f40f b/./.git/objects/19/7216815fae8c35c738edf4faea66b08ef7f40f
++new file mode 100644
++index 0000000..23aa4fc
++--- /dev/null
+++++ b/./.git/objects/19/7216815fae8c35c738edf4faea66b08ef7f40f
++@@ -0,0 +1,2 @@
+++x�P�J�0���v<��� ʂ�nV���� x)i;���$٢o��E�:�a޼y�^�LW�˳9PJ�`��i#ڏ�۪�5�(�E�R7`+w���ep�3���Czl�6�	��%<:PrD�����݉qT]$���^v�J�w��Z��!2��[����&)/_xQ�juM6�_��iP�J�.�7��y ���p���~J�e���"X���~�9���aglp5��K��p��c�oJ�fۊu�gY��7�bkV�:Y�f�c�
+++,M�f��X~
++\ No newline at end of file
++diff --git a/./.git/objects/23/2e78c911d3887206ad1804c45b4b4dc7e47c4f b/./.git/objects/23/2e78c911d3887206ad1804c45b4b4dc7e47c4f
++new file mode 100644
++index 0000000..a62f3bc
++Binary files /dev/null and b/./.git/objects/23/2e78c911d3887206ad1804c45b4b4dc7e47c4f differ
++diff --git a/./.git/objects/24/97791bc50ea040ba47095decb1f30a0dad0784 b/./.git/objects/24/97791bc50ea040ba47095decb1f30a0dad0784
++new file mode 100644
++index 0000000..0695185
++Binary files /dev/null and b/./.git/objects/24/97791bc50ea040ba47095decb1f30a0dad0784 differ
++diff --git a/./.git/objects/25/33084527022dd81bb345c7b7bac94dacf1955d b/./.git/objects/25/33084527022dd81bb345c7b7bac94dacf1955d
++new file mode 100644
++index 0000000..c869e18
++Binary files /dev/null and b/./.git/objects/25/33084527022dd81bb345c7b7bac94dacf1955d differ
++diff --git a/./.git/objects/35/a9396bcb2a93ff3eba60d1653e1d2b58746bca b/./.git/objects/35/a9396bcb2a93ff3eba60d1653e1d2b58746bca
++new file mode 100644
++index 0000000..58d8556
++Binary files /dev/null and b/./.git/objects/35/a9396bcb2a93ff3eba60d1653e1d2b58746bca differ
++diff --git a/./.git/objects/3e/dc0de6076fd1f54c1503f7246f17aa52bf1d01 b/./.git/objects/3e/dc0de6076fd1f54c1503f7246f17aa52bf1d01
++new file mode 100644
++index 0000000..cbe6684
++Binary files /dev/null and b/./.git/objects/3e/dc0de6076fd1f54c1503f7246f17aa52bf1d01 differ
++diff --git a/./.git/objects/3f/91d088ee1259b99d3c966320e24783bcdab57e b/./.git/objects/3f/91d088ee1259b99d3c966320e24783bcdab57e
++new file mode 100644
++index 0000000..e146b0c
++Binary files /dev/null and b/./.git/objects/3f/91d088ee1259b99d3c966320e24783bcdab57e differ
++diff --git a/./.git/objects/6a/77238ce3a709f3988686b433cdf9904891f5a9 b/./.git/objects/6a/77238ce3a709f3988686b433cdf9904891f5a9
++new file mode 100644
++index 0000000..8a09944
++Binary files /dev/null and b/./.git/objects/6a/77238ce3a709f3988686b433cdf9904891f5a9 differ
++diff --git a/./.git/objects/6d/28db004a818d06045cce3bc2138506bf912407 b/./.git/objects/6d/28db004a818d06045cce3bc2138506bf912407
++new file mode 100644
++index 0000000..87df1e2
++Binary files /dev/null and b/./.git/objects/6d/28db004a818d06045cce3bc2138506bf912407 differ
++diff --git a/./.git/objects/99/c49e3984cf8a6e2b72c6608542164f4be3a366 b/./.git/objects/99/c49e3984cf8a6e2b72c6608542164f4be3a366
++new file mode 100644
++index 0000000..8ea9e22
++Binary files /dev/null and b/./.git/objects/99/c49e3984cf8a6e2b72c6608542164f4be3a366 differ
++diff --git a/./.git/objects/a3/1c5cf1bc3f42611c1980092aa6b9aebe23310b b/./.git/objects/a3/1c5cf1bc3f42611c1980092aa6b9aebe23310b
++new file mode 100644
++index 0000000..d1a7f44
++Binary files /dev/null and b/./.git/objects/a3/1c5cf1bc3f42611c1980092aa6b9aebe23310b differ
++diff --git a/./.git/objects/ac/7ac130bb62d55b53a70285b8282ca373be82db b/./.git/objects/ac/7ac130bb62d55b53a70285b8282ca373be82db
++new file mode 100644
++index 0000000..4578ffc
++Binary files /dev/null and b/./.git/objects/ac/7ac130bb62d55b53a70285b8282ca373be82db differ
++diff --git a/./.git/objects/d6/2c055cfb9b35319c850796626e997514f72ffb b/./.git/objects/d6/2c055cfb9b35319c850796626e997514f72ffb
++new file mode 100644
++index 0000000..b95439b
++Binary files /dev/null and b/./.git/objects/d6/2c055cfb9b35319c850796626e997514f72ffb differ
++diff --git a/./.git/objects/d9/d0cb96f763d8a30e00bc2e469eb3568a64a2c4 b/./.git/objects/d9/d0cb96f763d8a30e00bc2e469eb3568a64a2c4
++new file mode 100644
++index 0000000..84d1cb1
++--- /dev/null
+++++ b/./.git/objects/d9/d0cb96f763d8a30e00bc2e469eb3568a64a2c4
++@@ -0,0 +1,2 @@
+++x��A� @Qלb�&�P�Hb�Kw�a��6Bi(��v�p��ԠGuh�z��u��L�ѓ��L���C!a����mm,R�D��o8'.��_�>3M�%_@Z������
+++Q�u�6�z�čj��Bb�^�k���V�C�
++\ No newline at end of file
++diff --git a/./.git/objects/f1/0b931128a7dfdcb94d8dfc2e1330385c67cefe b/./.git/objects/f1/0b931128a7dfdcb94d8dfc2e1330385c67cefe
++new file mode 100644
++index 0000000..03f9f6d
++Binary files /dev/null and b/./.git/objects/f1/0b931128a7dfdcb94d8dfc2e1330385c67cefe differ
++diff --git a/./.git/objects/f8/d61bafff55ba63b6cca060e047d8b93d931db9 b/./.git/objects/f8/d61bafff55ba63b6cca060e047d8b93d931db9
++new file mode 100644
++index 0000000..fc56489
++--- /dev/null
+++++ b/./.git/objects/f8/d61bafff55ba63b6cca060e047d8b93d931db9
++@@ -0,0 +1 @@
+++x��A�0@Q�=��MH���1.�y��0HcKI)�_6^��[��9�P�h{�E�"w<�g;��Gdt����ޑx1֢���:�1Q�m�\��%���D!6����t�m7X8k��:��V�;�TFY�Y���'~�+l\�Z7�:oC�
++\ No newline at end of file
++diff --git a/./.git/refs/codex/turn-diffs/captures/1790615991798/bddfe213-7ccf-4222-9d11-eddb2408bf6b/base b/./.git/refs/codex/turn-diffs/captures/1790615991798/bddfe213-7ccf-4222-9d11-eddb2408bf6b/base
++new file mode 100644
++index 0000000..5ff0e28
++--- /dev/null
+++++ b/./.git/refs/codex/turn-diffs/captures/1790615991798/bddfe213-7ccf-4222-9d11-eddb2408bf6b/base
++@@ -0,0 +1 @@
+++2497791bc50ea040ba47095decb1f30a0dad0784
++diff --git a/./.git/refs/heads/main b/./.git/refs/heads/main
++new file mode 100644
++index 0000000..77f0a2d
++--- /dev/null
+++++ b/./.git/refs/heads/main
++@@ -0,0 +1 @@
+++d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4
++diff --git a/./.git/refs/remotes/origin/main b/./.git/refs/remotes/origin/main
++new file mode 100644
++index 0000000..77f0a2d
++--- /dev/null
+++++ b/./.git/refs/remotes/origin/main
++@@ -0,0 +1 @@
+++d9d0cb96f763d8a30e00bc2e469eb3568a64a2c4
++diff --git a/./DEPLOYMENT.md b/./DEPLOYMENT.md
++new file mode 100644
++index 0000000..6d28db0
++--- /dev/null
+++++ b/./DEPLOYMENT.md
++@@ -0,0 +1,47 @@
+++# Deployment Notes
+++
+++Production host: `oracle@192.168.56.11`.
+++
+++Production script directory:
+++
+++```text
+++/home/oracle/oracle-backup
+++```
+++
+++Backup and log directories remain outside the script directory:
+++
+++```text
+++/u01/app/oracle/backups/orcl
+++/u01/app/oracle/backups/logs
+++```
+++
+++The previous script directory `/home/oracle/dba-scripts/oracle-backup` was moved to `/home/oracle/oracle-backup`.
+++
+++Use only long options. Options with values must use `--option=value` syntax.
+++
+++Cron-style archivelog example:
+++
+++```bash
+++cd /home/oracle/oracle-backup
+++./job-runner.sh \
+++  --silent \
+++  --job-name=orcl-archivelog \
+++  --job-script=rman-backup.sh \
+++  --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
+++  --logs-dir=/u01/app/oracle/backups/logs
+++```
+++
+++See `README.md` for usage, logging, locking, dry-run behavior, diagnostics, and tests.
+++
+++## Last Verified
+++
+++After moving to `/home/oracle/oracle-backup`, both checks succeeded:
+++
+++- `--dry-run`: `0`
+++- real `archivelog` run: `0`
+++
+++Latest verified RMAN log at the time of the move:
+++
+++```text
+++/u01/app/oracle/backups/logs/al_2026-09-28T195149.log
+++```
++diff --git a/./README.md b/./README.md
++new file mode 100644
++index 0000000..d62c055
++--- /dev/null
+++++ b/./README.md
++@@ -0,0 +1,173 @@
+++# Oracle RMAN Backup Scripts
+++
+++Bash scripts for Oracle RMAN backups on the Oracle host.
+++
+++Production script directory:
+++
+++```text
+++/home/oracle/oracle-backup
+++```
+++
+++Backup files and logs stay outside the script directory:
+++
+\ No newline at end of file
 diff --git a/./job-runner.conf b/./job-runner.conf
 new file mode 100644
 index 0000000..f10b931
@@ -123,7 +2677,7 @@ index 0000000..f10b931
 +export PATH=/usr/local/bin:$PATH
 +LOGS_DIR=/media/sf_Downloads/TEMP/ORABACKUP/logs
 diff --git "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/job-runner.sh" b/./job-runner.sh
-index 6996177..232e78c 100644
+index 6996177..4226c27 100644
 --- "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/job-runner.sh"
 +++ b/./job-runner.sh
 @@ -1,34 +1,242 @@
@@ -321,7 +2875,7 @@ index 6996177..232e78c 100644
 +    fi
 +    if $_job_started; then
 +        if ! $_silent || [[ $status -ne 0 ]]; then
-+            printf '%s finish job=%s status=%s signal=%s\n' \
++            printf '%s finish --job-name=%s --status=%s --signal=%s\n' \
 +                "$(log_prefix)" "$(log_escape "$_job_name")" "$status" "$(log_escape "${_signal:-none}")" >&2 || true
 +        fi
 +    fi
@@ -439,9 +2993,9 @@ index 6996177..232e78c 100644
 -echo "$(date +'%FT%T') End job: ${_job_name}"
 +_job_started=true
 +if ! $_silent; then
-+    printf '%s start job=%s lock=%s script=%s args=%s\n' \
++    printf '%s start --job-name=%s --lock=%s --job-script=%s --job-args=%s --logs-dir=%s\n' \
 +        "$(log_prefix)" "$(log_escape "$_job_name")" "$(log_escape "$_lock_name")" \
-+        "$(log_escape "$_job_script")" "$(log_escape "$_job_args")"
++        "$(log_escape "$_job_script")" "$(log_escape "$_job_args")" "$(log_escape "$_logs_dir")"
 +fi
 +if $_silent && [[ $(basename -- "$_job_script") == rman-backup.sh ]] && ! has_job_arg --silent; then
 +    job_args+=(--silent)
@@ -462,7 +3016,7 @@ index 6996177..232e78c 100644
 +_child_pid=$!
 +if wait "$_child_pid"; then return_code=0; else return_code=$?; fi
 +_child_pid=""
-+[[ $return_code -ne 0 ]] && printf '%s child_exit job=%s status=%s\n' \
++[[ $return_code -ne 0 ]] && printf '%s child_exit --job-name=%s --status=%s\n' \
 +    "$(log_prefix)" "$(log_escape "$_job_name")" "$return_code"
  exit "$return_code"
 diff --git "a/C:\\Users\\lm\\AppData\\Local\\Temp\\oracle-bash-before-26d961446a99486194b5c51c5de5bb1c/rman-backup.conf" b/./rman-backup.conf
@@ -1556,7 +4110,7 @@ index 0000000..2533084
 +echo 'PASS: successful repeated jobs do not leave diagnostics directories'
 diff --git a/./tests/job-runner-locks.sh b/./tests/job-runner-locks.sh
 new file mode 100644
-index 0000000..6a77238
+index 0000000..c74f521
 --- /dev/null
 +++ b/./tests/job-runner-locks.sh
 @@ -0,0 +1,194 @@
@@ -1689,8 +4243,8 @@ index 0000000..6a77238
 +fi
 +run_job quick
 +[[ $(wc -l < "$test_dir/starts") -eq 2 ]]
-+grep -Eq 'job-runner\.sh\[[0-9]+\]: start job=' "$test_dir/job-runner.sh.log"
-+grep -Eq 'job-runner\.sh\[[0-9]+\]: finish job=' "$test_dir/job-runner.sh.log"
++grep -Eq 'job-runner\.sh\[[0-9]+\]: start --job-name=' "$test_dir/job-runner.sh.log"
++grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=' "$test_dir/job-runner.sh.log"
 +! grep -Eq '^[[:space:]]+(lock|script|arguments):' "$test_dir/job-runner.sh.log"
 +echo 'PASS: child error is preserved and lock is released for the next run'
 +rm -- "$test_dir/starts" "$test_dir/finished" "$test_dir/job-runner.sh.log"
