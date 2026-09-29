@@ -140,15 +140,11 @@ Diagnostics directories are kept only for failures, signals, or cleanup errors. 
 
 ## Retention and Cleanup
 
-After a successful database or archivelog backup, RMAN removes obsolete backup sets and archived logs using the target database's current retention policy.
+After a successful database or archivelog backup, `DELETE OBSOLETE` removes backup sets that are no longer needed under the target database's configured RMAN retention policy. The script does not change that policy. Configure it once per database in RMAN, for example `CONFIGURE RETENTION POLICY TO REDUNDANCY 1;` or `CONFIGURE RETENTION POLICY TO REDUNDANCY 2;`.
 
-To use an explicit recovery window for this cleanup, set it in the per-database config, for example:
+Archivelog jobs run `BACKUP ... NOT BACKED UP 1 TIMES` followed by `DELETE INPUT`. RMAN removes each source archive log only after its backup succeeds and the configured archived-log deletion policy allows deletion. This lets frequent archivelog jobs free space without deleting a log before it is backed up. With multiple archive destinations, `DELETE INPUT` removes the copy used for the backup; use `DELETE ALL INPUT` only if every destination copy should be removed.
 
-```bash
-RMAN_OBSOLETE_RECOVERY_WINDOW_DAYS=30
-```
-
-The value must be a positive whole number. When set, it overrides the database's configured policy for that `DELETE OBSOLETE` command, so choose a window that matches the required recovery period. The script does not use `DELETE INPUT`: archived logs are kept until RMAN determines they are no longer needed by the active policy. Crosscheck and expired-record cleanup run before backup; `DELETE OBSOLETE` runs after backup. Common RMAN templates live in `rman-backup.conf`, and per-database files such as `rman-backup.orcl.conf` contain overrides.
+Crosscheck and expired-record cleanup run before backup; `DELETE OBSOLETE` runs after backup. Common RMAN templates live in `rman-backup.conf`, and per-database files such as `rman-backup.orcl.conf` contain overrides.
 
 ## Tests
 

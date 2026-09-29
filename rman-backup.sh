@@ -206,12 +206,6 @@ if [[ -f $_work_dir/rman-backup.${_oracle_sid}.conf ]]; then
     source "$_work_dir/rman-backup.${_oracle_sid}.conf"
 fi
 
-if [[ -n ${RMAN_OBSOLETE_RECOVERY_WINDOW_DAYS:-} &&
-      ! ${RMAN_OBSOLETE_RECOVERY_WINDOW_DAYS} =~ ^[1-9][0-9]*$ ]]; then
-    printf 'ERROR: RMAN_OBSOLETE_RECOVERY_WINDOW_DAYS must be a positive integer\n' >&2
-    exit 2
-fi
-
 export ORACLE_SID="$_oracle_sid" ORAENV_ASK=NO
 # Oracle's environment script may inspect unset variables.
 set +u
