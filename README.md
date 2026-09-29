@@ -142,6 +142,8 @@ job-runner.sh.log
 rman-backup.sh.log
 ```
 
+Each successful finish entry includes the elapsed runtime as `duration=<seconds>s`.
+
 Per-RMAN logs are still written as `*.log`, for example:
 
 ```text

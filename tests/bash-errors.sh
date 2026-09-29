@@ -167,7 +167,7 @@ bash "$scripts/rman-backup.sh" --silent --sid=orcl --task=archivelog \
     > "$test_dir/silent.console" 2>&1
 grep -Eq 'rman-backup\.sh\[[0-9]+\]: start sid=orcl task=archivelog' \
     "$silent_logs/rman-backup.sh.log"
-grep -Eq 'rman-backup\.sh\[[0-9]+\]: finish sid=orcl task=archivelog status=0' \
+grep -Eq 'rman-backup\.sh\[[0-9]+\]: finish sid=orcl task=archivelog status=0 .*duration=[0-9]+s' \
     "$silent_logs/rman-backup.sh.log"
 [[ ! -s $test_dir/silent.console ]]
 if grep -Eq 'Backup Config|SID Backup Config|ORACLE_SID|Begin RMAN Job|End RMAN Job|RMAN job finished|Diagnostics saved' \

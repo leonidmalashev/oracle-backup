@@ -1,6 +1,7 @@
 #!/bin/bash
 # rman-backup.sh - Oracle RMAN backup launcher.
 set -Eeuo pipefail
+_started_at=$SECONDS
 
 _verbose=false
 _silent=false
@@ -82,9 +83,10 @@ cleanup() {
         _child_pid=""
     fi
     if [[ -n $_task && ( $status -ne 0 || $_dry_run == false ) ]]; then
-        printf '%s finish sid=%s task=%s status=%s signal=%s phase=%s\n' \
+        local duration=$(( SECONDS - _started_at ))
+        printf '%s finish sid=%s task=%s status=%s signal=%s phase=%s duration=%ss\n' \
             "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
-            "$status" "$(log_escape "${_signal:-none}")" "$(log_escape "$_phase")" >&2 || true
+            "$status" "$(log_escape "${_signal:-none}")" "$(log_escape "$_phase")" "$duration" >&2 || true
     fi
     if [[ -n $_temp_dir && -d $_temp_dir ]]; then
         if $_dry_run; then

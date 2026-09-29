@@ -6,6 +6,7 @@
 #-------------------------------------------------------------------------------
 #set -x
 set -Eeuo pipefail
+_started_at=$SECONDS
 
 USAGE="Usage: $(basename "$0") --logs-dir=DIR --job-name=NAME --job-script=SCRIPT [--job-args='ARGUMENTS'] [--silent] [--dry-run]"
 _verbose=false
@@ -193,8 +194,10 @@ cleanup() {
     fi
     if $_job_started; then
         if ! $_silent || [[ $status -ne 0 || $_dry_run == false ]]; then
-            printf '%s finish --job-name=%s --status=%s --signal=%s\n' \
-                "$(log_prefix)" "$(log_escape "$_job_name")" "$status" "$(log_escape "${_signal:-none}")" >&2 || true
+            local duration=$(( SECONDS - _started_at ))
+            printf '%s finish --job-name=%s --status=%s --signal=%s --duration=%ss\n' \
+                "$(log_prefix)" "$(log_escape "$_job_name")" "$status" \
+                "$(log_escape "${_signal:-none}")" "$duration" >&2 || true
         fi
     fi
     exit "$status"

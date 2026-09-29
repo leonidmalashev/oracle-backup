@@ -144,7 +144,7 @@ bash "$test_dir/job-runner.sh" --silent --logs-dir="$test_dir" \
     --job-name="$job" --job-script=child.sh --job-args="$test_dir quick" \
     > "$test_dir/silent.console" 2>&1
 grep -Eq 'job-runner\.sh\[[0-9]+\]: start --job-name=' "$test_dir/job-runner.sh.log"
-grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=.*--status=0' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=.*--status=0 .*--duration=[0-9]+s' "$test_dir/job-runner.sh.log"
 if [[ -s $test_dir/silent.console ]]; then
     echo 'FAIL: --silent wrote routine runner messages to the console' >&2
     exit 1
