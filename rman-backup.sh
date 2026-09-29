@@ -51,7 +51,7 @@ Options:
       --logs-dir=DIR        Directory for wrapper logs and diagnostics.
       --dry-run             Generate and show the RMAN script and command, then exit.
                             Does not run RMAN, delete logs, or remove temp files.
-      --silent              Suppress routine success messages; keep errors.
+      --silent              Suppress console output; keep routine log entries and errors.
       --help                Show this help.
 EOF
 }
@@ -81,7 +81,7 @@ cleanup() {
         wait "$_child_pid" 2>/dev/null || true
         _child_pid=""
     fi
-    if [[ -n $_task && ( $status -ne 0 || ( $_dry_run == false && $_silent == false ) ) ]]; then
+    if [[ -n $_task && ( $status -ne 0 || $_dry_run == false ) ]]; then
         printf '%s finish sid=%s task=%s status=%s signal=%s phase=%s\n' \
             "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
             "$status" "$(log_escape "${_signal:-none}")" "$(log_escape "$_phase")" >&2 || true
@@ -218,7 +218,7 @@ if [[ -z ${ORACLE_HOME:-} ]]; then
 fi
 mkdir -p -- "${_base_backup_dir}/${_oracle_sid}"
 LOGS_DIR=$_logs_dir
-if ! $_silent; then
+if ! $_silent || [[ $_dry_run == false ]]; then
     printf '%s start sid=%s task=%s base_backup_dir=%s logs_dir=%s config=%s sid_config=%s\n' \
         "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
         "$(log_escape "$_base_backup_dir")" "$(log_escape "$LOGS_DIR")" \

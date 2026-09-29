@@ -42,7 +42,7 @@ Options:
       --job-script=SCRIPT   Script from this directory to run.
       --job-args=ARGS       Argument string passed to the job script.
       --logs-dir=DIR        Directory for job-runner logs.
-      --silent              Suppress routine success messages; keep errors.
+      --silent              Suppress console output; keep routine log entries and errors.
       --dry-run             Show what would run. For rman-backup.sh, passed through.
       --help                Show this help.
 
@@ -175,10 +175,10 @@ derive_lock_name() {
         else
             _rman_group_lock_mode=shared
         fi
-        printf 'rman-backup.%s.%s\n' "$sid" "$task"
+        _lock_name="rman-backup.${sid}.${task}"
         return 0
     fi
-    printf '%s\n' "$_job_name"
+    _lock_name=$_job_name
 }
 
 cleanup() {
@@ -192,7 +192,7 @@ cleanup() {
         wait "$_child_pid" 2>/dev/null || true
     fi
     if $_job_started; then
-        if ! $_silent || [[ $status -ne 0 ]]; then
+        if ! $_silent || [[ $status -ne 0 || $_dry_run == false ]]; then
             printf '%s finish --job-name=%s --status=%s --signal=%s\n' \
                 "$(log_prefix)" "$(log_escape "$_job_name")" "$status" "$(log_escape "${_signal:-none}")" >&2 || true
         fi
@@ -267,7 +267,7 @@ if [[ ! -f "${_work_dir}/${_job_script}" || ! -x "${_work_dir}/${_job_script}" ]
     echo "ERROR: Job script is not executable: ${_work_dir}/${_job_script}" >&2
     exit 1
 fi
-_lock_name=$(derive_lock_name)
+derive_lock_name
 if [[ ! ${_lock_name:-} =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
     echo "ERROR: Invalid lock name derived from job arguments" >&2
     exit 1
@@ -333,7 +333,7 @@ else
 fi
 
 _job_started=true
-if ! $_silent; then
+if ! $_silent || [[ $_dry_run == false ]]; then
     printf '%s start --job-name=%s --lock=%s --job-script=%s --job-args=%s --logs-dir=%s\n' \
         "$(log_prefix)" "$(log_escape "$_job_name")" "$(log_escape "$_lock_name")" \
         "$(log_escape "$_job_script")" "$(log_escape "$_job_args")" "$(log_escape "$_logs_dir")"

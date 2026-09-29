@@ -128,15 +128,29 @@ done
 echo 'PASS: short options are rejected'
 echo 'PASS: missing options and values report errors without unbound variables'
 
-for task in database-i0 database-i1 archivelog restore_validate; do
+for task in database-i0 database-i1 archivelog maintenance restore_validate; do
     run_rman "$task"
     grep -q 'CONNECT TARGET /' "$test_dir/generated.rman"
     case $task in
         database-i0) grep -q 'INCREMENTAL LEVEL = 0' "$test_dir/generated.rman" ;;
         database-i1) grep -q 'INCREMENTAL LEVEL = 1' "$test_dir/generated.rman" ;;
-        archivelog) grep -q 'NOT BACKED UP 1 TIMES' "$test_dir/generated.rman" ;;
+        archivelog)
+            grep -q 'NOT BACKED UP 1 TIMES' "$test_dir/generated.rman"
+            grep -q 'DELETE INPUT;' "$test_dir/generated.rman"
+            ! grep -Eq 'CROSSCHECK|DELETE NOPROMPT EXPIRED|DELETE NOPROMPT OBSOLETE' "$test_dir/generated.rman"
+            ;;
+        maintenance)
+            grep -q 'CROSSCHECK BACKUP;' "$test_dir/generated.rman"
+            grep -q 'CROSSCHECK ARCHIVELOG ALL;' "$test_dir/generated.rman"
+            grep -q 'DELETE NOPROMPT EXPIRED BACKUP;' "$test_dir/generated.rman"
+            grep -q 'DELETE NOPROMPT EXPIRED ARCHIVELOG ALL;' "$test_dir/generated.rman"
+            ;;
         restore_validate) grep -q 'RESTORE DATABASE VALIDATE;' "$test_dir/generated.rman" ;;
     esac
+    if [[ $task == database-i0 || $task == database-i1 ]]; then
+        grep -q 'DELETE NOPROMPT OBSOLETE;' "$test_dir/generated.rman"
+        ! grep -Eq 'CROSSCHECK|DELETE NOPROMPT EXPIRED' "$test_dir/generated.rman"
+    fi
     assert_temp_empty
     assert_no_diagnostics "$test_dir/logs $task"
     find "$test_dir/logs $task" -mindepth 1 -maxdepth 1 -type f -name '*.log' -print -quit | grep -q .
@@ -145,19 +159,25 @@ for task in database-i0 database-i1 archivelog restore_validate; do
     ! grep -Eq '^(Backup Config|SID Backup Config|ORACLE_SID|Base Backups Directory|Logs Directory|Task:|[0-9].*Begin RMAN Job|[0-9].*End RMAN Job)' \
         "$test_dir/logs $task/rman-backup.sh.log"
 done
-echo 'PASS: all four tasks support spaces and new log directories; temp files are cleaned'
+echo 'PASS: all five tasks support spaces and new log directories; temp files are cleaned'
 
 silent_logs="$test_dir/silent logs"
 bash "$scripts/rman-backup.sh" --silent --sid=orcl --task=archivelog \
-    --logs-dir="$silent_logs" --base-backup-dir="$test_dir/silent backups"
+    --logs-dir="$silent_logs" --base-backup-dir="$test_dir/silent backups" \
+    > "$test_dir/silent.console" 2>&1
+grep -Eq 'rman-backup\.sh\[[0-9]+\]: start sid=orcl task=archivelog' \
+    "$silent_logs/rman-backup.sh.log"
+grep -Eq 'rman-backup\.sh\[[0-9]+\]: finish sid=orcl task=archivelog status=0' \
+    "$silent_logs/rman-backup.sh.log"
+[[ ! -s $test_dir/silent.console ]]
 if grep -Eq 'Backup Config|SID Backup Config|ORACLE_SID|Begin RMAN Job|End RMAN Job|RMAN job finished|Diagnostics saved' \
     "$silent_logs/rman-backup.sh.log"; then
-    echo 'FAIL: --silent wrote routine RMAN messages' >&2
+    echo 'FAIL: --silent wrote console-only RMAN messages' >&2
     exit 1
 fi
 assert_temp_empty
 assert_no_diagnostics "$silent_logs"
-echo 'PASS: --silent suppresses routine RMAN messages while preserving diagnostics'
+echo 'PASS: --silent keeps console quiet and writes start/finish to the RMAN wrapper log'
 
 rm -f -- "$test_dir/generated.rman"
 dry_logs="$test_dir/dry logs"

@@ -17,11 +17,11 @@ Backup files and logs stay outside the script directory:
 
 ## Files
 
-- `rman-backup.sh` - RMAN launcher that generates the RMAN script and runs RMAN.
-- `rman-backup.conf` - common RMAN templates and defaults.
+- `rman-backup.sh`         - RMAN launcher that generates the RMAN script and runs RMAN.
+- `rman-backup.conf`       - common RMAN templates and defaults.
 - `rman-backup.<sid>.conf` - per-database overrides, for example `rman-backup.orcl.conf`.
-- `job-runner.sh` - wrapper for scheduled jobs, locking, signal handling, and cron-friendly logging.
-- `job-runner.conf` - runner environment settings.
+- `job-runner.sh`          - wrapper for scheduled jobs, locking, signal handling, and cron-friendly logging.
+- `job-runner.conf`        - runner environment settings.
 
 ## Command Line Rules
 
@@ -58,6 +58,18 @@ cd /home/oracle/oracle-backup
   --task=database-i0 \
   --base-backup-dir=/u01/app/oracle/backups \
   --logs-dir=/u01/app/oracle/backups/logs
+
+./rman-backup.sh \
+  --sid=orcl \
+  --task=maintenance \
+  --base-backup-dir=/u01/app/oracle/backups \
+  --logs-dir=/u01/app/oracle/backups/logs
+
+./rman-backup.sh \
+  --sid=orcl \
+  --task=restore_validate \
+  --base-backup-dir=/u01/app/oracle/backups \
+  --logs-dir=/u01/app/oracle/backups/logs
 ```
 
 ## Scheduled/Cron Usage
@@ -82,7 +94,7 @@ cd /home/oracle/oracle-backup
   --logs-dir=/u01/app/oracle/backups/logs
 ```
 
-`--silent` suppresses routine success messages in wrapper logs. Errors are still logged.
+`--silent` keeps routine output off the console. Successful start/end records and errors are still written to the wrapper logs.
 
 ## Dry Run
 

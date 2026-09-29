@@ -22,7 +22,10 @@ cleanup() {
         "$test_dir/injected" "$test_dir/target" "$test_dir/child.pid"
     rm -f -- "$HOME/.job-runner-locks/rman-backup.orcl.archivelog.lock" \
         "$HOME/.job-runner-locks/rman-backup.test.archivelog.lock" \
-        "$HOME/.job-runner-locks/rman-backup.orcl.database-i0.lock"
+        "$HOME/.job-runner-locks/rman-backup.orcl.database-i0.lock" \
+        "$HOME/.job-runner-locks/rman-backup.orcl.maintenance.lock" \
+        "$HOME/.job-runner-locks/rman-maintenance.orcl.lock" \
+        "$HOME/.job-runner-locks/rman-maintenance.test.lock"
     export HOME=$real_home
     rmdir -- "$test_dir/home/.job-runner-locks" "$test_dir/home" 2>/dev/null || true
     rmdir -- "$test_dir"
@@ -104,11 +107,15 @@ sleep 1
 grep -qx 'orcl archivelog' "$test_dir/rman-starts"
 grep -qx 'test archivelog' "$test_dir/rman-starts"
 grep -qx 'orcl database-i0' "$test_dir/rman-starts"
+run_rman_job orcl maintenance &
+pids+=("$!")
+sleep 1
+[[ $(wc -l < "$test_dir/rman-starts") -eq 3 ]]
 touch "$test_dir/rman-release"
 for pid in "${pids[@]}"; do wait "$pid"; done
 pids=()
 [[ $(wc -l < "$test_dir/rman-starts") -eq 3 ]]
-echo 'PASS: RMAN locks are scoped by SID and task'
+echo 'PASS: RMAN locks are scoped by SID/task and maintenance excludes concurrent tasks'
 rm -- "$test_dir/rman-starts" "$test_dir/rman-release"
 
 if TEST_DIR=$test_dir bash "$test_dir/job-runner.sh" --logs-dir="$test_dir" \
@@ -134,13 +141,16 @@ echo 'PASS: child error is preserved and lock is released for the next run'
 rm -- "$test_dir/starts" "$test_dir/finished" "$test_dir/job-runner.sh.log"
 
 bash "$test_dir/job-runner.sh" --silent --logs-dir="$test_dir" \
-    --job-name="$job" --job-script=child.sh --job-args="$test_dir quick"
-if grep -Eq 'Start job|End job|script:|arguments:' "$test_dir/job-runner.sh.log"; then
-    echo 'FAIL: --silent wrote routine runner messages' >&2
+    --job-name="$job" --job-script=child.sh --job-args="$test_dir quick" \
+    > "$test_dir/silent.console" 2>&1
+grep -Eq 'job-runner\.sh\[[0-9]+\]: start --job-name=' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=.*--status=0' "$test_dir/job-runner.sh.log"
+if [[ -s $test_dir/silent.console ]]; then
+    echo 'FAIL: --silent wrote routine runner messages to the console' >&2
     exit 1
 fi
-echo 'PASS: --silent suppresses routine runner messages'
-rm -- "$test_dir/job-runner.sh.log" "$test_dir/starts" "$test_dir/finished"
+echo 'PASS: --silent keeps console quiet and writes start/finish to the runner log'
+rm -- "$test_dir/job-runner.sh.log" "$test_dir/starts" "$test_dir/finished" "$test_dir/silent.console"
 
 bash "$test_dir/job-runner.sh" --dry-run --logs-dir="$test_dir" \
     --job-name="$job" --job-script=child.sh --job-args="$test_dir quick" > "$test_dir/dry-run.out" 2>&1
