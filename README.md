@@ -138,13 +138,17 @@ Diagnostics directories are kept only for failures, signals, or cleanup errors. 
 
 `--dry-run` keeps its temporary directory by design.
 
-## Configuration
+## Retention and Cleanup
 
-Common RMAN templates live in `rman-backup.conf`.
+After a successful database or archivelog backup, RMAN removes obsolete backup sets and archived logs using the target database's current retention policy.
 
-Per-database files, such as `rman-backup.orcl.conf`, should contain only overrides: files-per-set, section size, extra RMAN output, or safety switches.
+To use an explicit recovery window for this cleanup, set it in the per-database config, for example:
 
-The current production ORCL config keeps initial-deployment safeguards: crosscheck/delete commands are disabled and `DELETE INPUT` is not used.
+```bash
+RMAN_OBSOLETE_RECOVERY_WINDOW_DAYS=30
+```
+
+The value must be a positive whole number. When set, it overrides the database's configured policy for that `DELETE OBSOLETE` command, so choose a window that matches the required recovery period. The script does not use `DELETE INPUT`: archived logs are kept until RMAN determines they are no longer needed by the active policy. Crosscheck and expired-record cleanup run before backup; `DELETE OBSOLETE` runs after backup. Common RMAN templates live in `rman-backup.conf`, and per-database files such as `rman-backup.orcl.conf` contain overrides.
 
 ## Tests
 
