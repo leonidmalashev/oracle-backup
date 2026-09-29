@@ -136,7 +136,7 @@ for task in database-i0 database-i1 archivelog maintenance restore_validate; do
         database-i1) grep -q 'INCREMENTAL LEVEL = 1' "$test_dir/generated.rman" ;;
         archivelog)
             grep -q 'NOT BACKED UP 1 TIMES' "$test_dir/generated.rman"
-            grep -q 'DELETE INPUT;' "$test_dir/generated.rman"
+            grep -Eq 'DELETE INPUT;$' "$test_dir/generated.rman"
             ! grep -Eq 'CROSSCHECK|DELETE NOPROMPT EXPIRED|DELETE NOPROMPT OBSOLETE' "$test_dir/generated.rman"
             ;;
         maintenance)
