@@ -58,11 +58,19 @@ Use `job-runner.sh` for cron. It applies locking and forwards signals to the chi
 
 ```bash
 cd /home/oracle/oracle-backup
+
 ./job-runner.sh \
   --silent \
   --job-name=orcl-archivelog \
   --job-script=rman-backup.sh \
   --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
+  --logs-dir=/u01/app/oracle/backups/logs
+
+./job-runner.sh \
+  --silent \
+  --job-name=orcl-database-i0 \
+  --job-script=rman-backup.sh \
+  --job-args="--sid=orcl --task=database-i0 --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
   --logs-dir=/u01/app/oracle/backups/logs
 ```
 
