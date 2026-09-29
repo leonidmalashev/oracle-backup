@@ -29,6 +29,13 @@ cd /home/oracle/oracle-backup
   --job-script=rman-backup.sh \
   --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
   --logs-dir=/u01/app/oracle/backups/logs
+
+./job-runner.sh \
+  --silent \
+  --job-name=orcl-database-i0 \
+  --job-script=rman-backup.sh \
+  --job-args="--sid=orcl --task=database-i0 --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
+  --logs-dir=/u01/app/oracle/backups/logs
 ```
 
 See `README.md` for usage, logging, locking, dry-run behavior, diagnostics, and tests.
