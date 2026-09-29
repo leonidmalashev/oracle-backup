@@ -46,7 +46,7 @@ $USAGE
 
 Options:
       --sid=SID             Oracle SID to back up.
-      --task=TASK           One of: database-i0, database-i1, archivelog, restore_validate.
+      --task=TASK           One of: database-i0, database-i1, archivelog, maintenance, restore_validate.
       --base-backup-dir=DIR Base directory for backup pieces.
       --logs-dir=DIR        Directory for wrapper logs and diagnostics.
       --dry-run             Generate and show the RMAN script and command, then exit.
@@ -137,7 +137,7 @@ trap 'handle_signal 130 INT' INT
 trap 'handle_signal 143 TERM' TERM
 trap 'handle_signal 129 HUP' HUP
 
-USAGE="Usage: $(basename "$0") --sid=SID --task=[ database-i0 | database-i1 | archivelog | restore_validate ] --base-backup-dir=DIR --logs-dir=DIR [--silent] [--dry-run]"
+USAGE="Usage: $(basename "$0") --sid=SID --task=[ database-i0 | database-i1 | archivelog | maintenance | restore_validate ] --base-backup-dir=DIR --logs-dir=DIR [--silent] [--dry-run]"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --sid|--task|--base-backup-dir|--logs-dir)
@@ -174,6 +174,7 @@ case $_task in
     database-i0) job_name=i0 ;;
     database-i1) job_name=i1 ;;
     archivelog) job_name=al ;;
+    maintenance) job_name=maint ;;
     restore_validate) job_name=rv ;;
     *) printf 'ERROR: Unknown task: %s\n%s\n' "$_task" "$USAGE" >&2; exit 2 ;;
 esac
@@ -235,6 +236,7 @@ case $_task in
     database-i0) create_rman_backup_database_i0_script "$_rman_scr" "$backup_tag" "$job_name" ;;
     database-i1) create_rman_backup_database_i1_script "$_rman_scr" "$backup_tag" "$job_name" ;;
     archivelog) create_rman_backup_archivelog_script "$_rman_scr" "$backup_tag" "$job_name" ;;
+    maintenance) create_rman_maintenance_script "$_rman_scr" "$backup_tag" ;;
     restore_validate) create_rman_restore_database_validate_script "$_rman_scr" "$backup_tag" "$job_name" ;;
 esac
 if [[ ! -f $_rman_scr ]]; then

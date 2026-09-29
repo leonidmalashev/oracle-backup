@@ -19,6 +19,10 @@ _child_pid=""
 _signal=""
 _job_started=false
 _lock_name=""
+_rman_sid=""
+_rman_task=""
+_rman_group_lock_name=""
+_rman_group_lock_mode=""
 POSITIONAL_ARGS=()
 job_args=()
 
@@ -45,6 +49,7 @@ Options:
 RMAN jobs:
   rman-backup.sh jobs require --sid=SID and --task=TASK inside --job-args.
   Their lock key is rman-backup.<SID>.<task>.
+  The maintenance task also takes an exclusive per-SID lock against all RMAN tasks.
 EOF
 }
 
@@ -162,6 +167,14 @@ derive_lock_name() {
             echo "ERROR: rman-backup.sh jobs require --sid=SID and --task=TASK for locking" >&2
             exit 2
         fi
+        _rman_sid=$sid
+        _rman_task=$task
+        _rman_group_lock_name="rman-maintenance.${sid}"
+        if [[ $task == maintenance ]]; then
+            _rman_group_lock_mode=exclusive
+        else
+            _rman_group_lock_mode=shared
+        fi
         printf 'rman-backup.%s.%s\n' "$sid" "$task"
         return 0
     fi
@@ -273,6 +286,30 @@ fi
 if [[ $(stat -c '%a' -- "$_lock_dir") != 700 ]]; then
     echo "ERROR: Lock directory must have permissions 700: $_lock_dir" >&2
     exit 1
+fi
+
+if [[ -n $_rman_group_lock_name ]]; then
+    _rman_group_lock_file="$_lock_dir/${_rman_group_lock_name}.lock"
+    if [[ -L $_rman_group_lock_file || ( -e $_rman_group_lock_file &&
+          ( ! -f $_rman_group_lock_file || ! -O $_rman_group_lock_file ) ) ]]; then
+        echo "ERROR: Unsafe RMAN group lock file: $_rman_group_lock_file" >&2
+        exit 1
+    fi
+    # Backup jobs share this SID lock; maintenance holds it exclusively.
+    # The child inherits descriptor 8, so maintenance cannot overlap a live RMAN process.
+    exec 8>> "$_rman_group_lock_file"
+    if [[ $_rman_group_lock_mode == exclusive ]]; then
+        if flock -n -E 75 -x 8; then lock_status=0; else lock_status=$?; fi
+    else
+        if flock -n -E 75 -s 8; then lock_status=0; else lock_status=$?; fi
+    fi
+    if [[ $lock_status -eq 75 ]]; then
+        log_warn "$(date +'%FT%T') WARNING: RMAN work is already running for SID ${_rman_sid}"
+        exit 0
+    elif [[ $lock_status -ne 0 ]]; then
+        echo "ERROR: Cannot acquire RMAN group lock (code $lock_status): $_rman_group_lock_file" >&2
+        exit "$lock_status"
+    fi
 fi
 
 _lock_file="$_lock_dir/${_lock_name}.lock"
