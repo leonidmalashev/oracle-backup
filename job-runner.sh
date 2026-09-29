@@ -70,6 +70,15 @@ log_escape() {
     printf '%s' "$value"
 }
 
+log_quote() {
+    local value=${1//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\n'/\\n}
+    value=${value//$'\r'/\\r}
+    value=${value//$'\t'/\\t}
+    printf '"%s"' "$value"
+}
+
 log_stamp() {
     date '+%b %e %T'
 }
@@ -195,7 +204,7 @@ cleanup() {
     if $_job_started; then
         if ! $_silent || [[ $status -ne 0 || $_dry_run == false ]]; then
             local duration=$(( SECONDS - _started_at ))
-            printf '%s finish --job-name=%s --status=%s --signal=%s duration=%ss\n' \
+            printf '%s finish job-name=%s status=%s signal=%s duration=%ss\n' \
                 "$(log_prefix)" "$(log_escape "$_job_name")" "$status" \
                 "$(log_escape "${_signal:-none}")" "$duration" >&2 || true
         fi
@@ -337,9 +346,9 @@ fi
 
 _job_started=true
 if ! $_silent || [[ $_dry_run == false ]]; then
-    printf '%s start --job-name=%s --lock=%s --job-script=%s --job-args=%s --logs-dir=%s\n' \
+    printf '%s start job-name=%s lock=%s job-script=%s job-args=%s logs-dir=%s\n' \
         "$(log_prefix)" "$(log_escape "$_job_name")" "$(log_escape "$_lock_name")" \
-        "$(log_escape "$_job_script")" "$(log_escape "$_job_args")" "$(log_escape "$_logs_dir")"
+        "$(log_escape "$_job_script")" "$(log_quote "$_job_args")" "$(log_escape "$_logs_dir")"
 fi
 if $_silent && [[ $(basename -- "$_job_script") == rman-backup.sh ]] && ! has_job_arg --silent; then
     job_args+=(--silent)

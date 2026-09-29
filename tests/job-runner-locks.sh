@@ -134,8 +134,8 @@ else
 fi
 run_job quick
 [[ $(wc -l < "$test_dir/starts") -eq 2 ]]
-grep -Eq 'job-runner\.sh\[[0-9]+\]: start --job-name=' "$test_dir/job-runner.sh.log"
-grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: start job-name=' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: finish job-name=' "$test_dir/job-runner.sh.log"
 ! grep -Eq '^[[:space:]]+(lock|script|arguments):' "$test_dir/job-runner.sh.log"
 echo 'PASS: child error is preserved and lock is released for the next run'
 rm -- "$test_dir/starts" "$test_dir/finished" "$test_dir/job-runner.sh.log"
@@ -143,8 +143,10 @@ rm -- "$test_dir/starts" "$test_dir/finished" "$test_dir/job-runner.sh.log"
 bash "$test_dir/job-runner.sh" --silent --logs-dir="$test_dir" \
     --job-name="$job" --job-script=child.sh --job-args="$test_dir quick" \
     > "$test_dir/silent.console" 2>&1
-grep -Eq 'job-runner\.sh\[[0-9]+\]: start --job-name=' "$test_dir/job-runner.sh.log"
-grep -Eq 'job-runner\.sh\[[0-9]+\]: finish --job-name=.*--status=0 .*duration=[0-9]+s' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: start job-name=' "$test_dir/job-runner.sh.log"
+grep -Eq 'job-runner\.sh\[[0-9]+\]: finish job-name=.* status=0 .*duration=[0-9]+s' "$test_dir/job-runner.sh.log"
+grep -Fq "job-args=\"$test_dir quick\"" "$test_dir/job-runner.sh.log"
+! grep -Fq "$test_dir\\ quick" "$test_dir/job-runner.sh.log"
 if [[ -s $test_dir/silent.console ]]; then
     echo 'FAIL: --silent wrote routine runner messages to the console' >&2
     exit 1
