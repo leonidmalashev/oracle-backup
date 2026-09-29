@@ -17,16 +17,13 @@ Backup files and logs stay outside the script directory:
 
 ## Files
 
-- `job-runner.sh` - wrapper for scheduled jobs, locking, signal handling, and cron-friendly logging.
 - `rman-backup.sh` - RMAN launcher that generates the RMAN script and runs RMAN.
 - `rman-backup.conf` - common RMAN templates and defaults.
 - `rman-backup.<sid>.conf` - per-database overrides, for example `rman-backup.orcl.conf`.
+- `job-runner.sh` - wrapper for scheduled jobs, locking, signal handling, and cron-friendly logging.
 - `job-runner.conf` - runner environment settings.
-- `tests/` - Linux integration tests with fake RMAN/Oracle tools.
 
 ## Command Line Rules
-
-Only long options are supported. Options with values must use `=`:
 
 ```bash
 --sid=orcl
@@ -34,14 +31,6 @@ Only long options are supported. Options with values must use `=`:
 --base-backup-dir=/u01/app/oracle/backups
 --logs-dir=/u01/app/oracle/backups/logs
 ```
-
-The space form is intentionally rejected:
-
-```bash
---sid orcl
-```
-
-Short options such as `-s`, `-t`, `-n`, `-j`, `-p`, and `-h` are not supported.
 
 ## Tasks
 
@@ -115,33 +104,22 @@ This means:
 - different SIDs can run in parallel;
 - different tasks for the same SID can run in parallel.
 
-Legacy PID files are not used.
-
 ## Logs
 
 Wrapper logs:
 
 ```text
-/u01/app/oracle/backups/logs/job-runner.sh.log
-/u01/app/oracle/backups/logs/rman-backup.sh.log
-```
-
-The format is syslog-like with `key=value` payloads:
-
-```text
-Sep 28 19:40:28 orcl1 rman-backup.sh[39696]: start sid=orcl task=archivelog base_backup_dir=/u01/app/oracle/backups logs_dir=/u01/app/oracle/backups/logs config=./rman-backup.conf sid_config=./rman-backup.orcl.conf
-Sep 28 19:40:39 orcl1 rman-backup.sh[39696]: finish sid=orcl task=archivelog status=0 signal=none phase=log-retention
+job-runner.sh.log
+rman-backup.sh.log
 ```
 
 Per-RMAN logs are still written as `*.log`, for example:
 
 ```text
-/u01/app/oracle/backups/logs/al_2026-09-28T195149.log
+al_2026-09-28T195149.log
 ```
 
 ## Diagnostics
-
-Successful real backups do not leave `rman-*` diagnostic directories.
 
 Diagnostics directories are kept only for failures, signals, or cleanup errors. They contain:
 
