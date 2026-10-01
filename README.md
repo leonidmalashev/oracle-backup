@@ -44,6 +44,8 @@ Supported RMAN tasks:
 
 ## Direct RMAN Wrapper Usage
 
+Both scripts support `--version` and print the revision embedded when installed from a Git archive.
+
 ```bash
 cd /home/oracle/oracle-backup
 
@@ -82,19 +84,25 @@ cd /home/oracle/oracle-backup
 ./job-runner.sh \
   --silent \
   --job-name=orcl-archivelog \
+  --logs-dir=/u01/app/oracle/backups/logs \
   --job-script=rman-backup.sh \
-  --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
-  --logs-dir=/u01/app/oracle/backups/logs
+  --job-args="--sid=orcl --task=archivelog --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs"
 
 ./job-runner.sh \
   --silent \
   --job-name=orcl-database-i0 \
+  --logs-dir=/u01/app/oracle/backups/logs \
   --job-script=rman-backup.sh \
-  --job-args="--sid=orcl --task=database-i0 --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs" \
-  --logs-dir=/u01/app/oracle/backups/logs
+  --job-args="--sid=orcl --task=database-i0 --base-backup-dir=/u01/app/oracle/backups --logs-dir=/u01/app/oracle/backups/logs"
 ```
 
 `--silent` keeps routine output off the console. Successful start/end records and errors are still written to the wrapper logs.
+
+Cron Example:
+```sh
+10 */1 * *  * $HOME/oracle-backup/job-runner.sh --silent --job-name=icsad-archivelog --logs-dir=/ORABACKUP/ICSAD/logs --job-script=rman-backup.sh --job-args="--sid=ICSAD --task=archivelog --base-backup-dir=/ORABACKUP/ICSAD --logs-dir=/ORABACKUP/ICSAD/logs"
+30 21 * *  5 $HOME/oracle-backup/job-runner.sh --silent --job-name=icsad-database-i0 --logs-dir=/ORABACKUP/ICSAD/logs --job-script=rman-backup.sh --job-args="--sid=ICSAD --task=database-i0 --base-backup-dir=/ORABACKUP/ICSAD --logs-dir=/ORABACKUP/ICSAD/logs"
+```
 
 ## Dry Run
 

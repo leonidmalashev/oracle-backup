@@ -1,9 +1,9 @@
 #!/bin/bash
 # rman-backup.sh - Oracle RMAN backup launcher.
+# RMAN_BACKUP_GIT_ARCHIVE: $Format:Last commit: %h at %cI$
 set -Eeuo pipefail
 _started_at=$SECONDS
 
-_verbose=false
 _silent=false
 _dry_run=false
 _oracle_sid=""
@@ -53,8 +53,22 @@ Options:
       --dry-run             Generate and show the RMAN script and command, then exit.
                             Does not run RMAN, delete logs, or remove temp files.
       --silent              Suppress console output; keep routine log entries and errors.
+      --version             Show the version embedded by git archive.
       --help                Show this help.
 EOF
+}
+
+print_version() {
+    local script_path=${BASH_SOURCE[0]}
+    local archive_version archive_marker='$'
+
+    archive_version=$(sed -n 's/^# RMAN_BACKUP_GIT_ARCHIVE: //p' "$script_path")
+    archive_marker+='Format:'
+    if [[ ${archive_version:0:8} == "$archive_marker" ]]; then
+        printf '%s\n' 'Version unavailable: install from git archive'
+    else
+        printf '%s\n' "$archive_version"
+    fi
 }
 
 sanitize() {
@@ -149,6 +163,7 @@ while [[ $# -gt 0 ]]; do
     esac
     case $1 in
         --help)            print_help; exit 0 ;;
+        --version)         print_version; exit 0 ;;
         --silent)          _silent=true; shift ;;
         --dry-run)         _dry_run=true; shift ;;
         --sid=*)           _oracle_sid=${1#*=}; shift ;;
@@ -219,16 +234,14 @@ if [[ -z ${ORACLE_HOME:-} ]]; then
     exit 1
 fi
 mkdir -p -- "${_base_backup_dir}/${_oracle_sid}"
-LOGS_DIR=$_logs_dir
 if ! $_silent || [[ $_dry_run == false ]]; then
     printf '%s start sid=%s task=%s base_backup_dir=%s logs_dir=%s config=%s sid_config=%s\n' \
         "$(log_prefix)" "$(log_escape "$_oracle_sid")" "$(log_escape "$_task")" \
-        "$(log_escape "$_base_backup_dir")" "$(log_escape "$LOGS_DIR")" \
+        "$(log_escape "$_base_backup_dir")" "$(log_escape "$_logs_dir")" \
         "$(log_escape "$_backup_config")" "$(log_escape "$_sid_config")"
 fi
 
-job_time=$(date +'%FT%T')
-backup_tag="${job_name}_${job_time}"
+backup_tag="${job_name}_$(date +'%FT%T')"
 _temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/rman.XXXXXXXX")
 _rman_scr="$_temp_dir/rman.scr"
 _rman_log="$_temp_dir/rman.log"
@@ -273,6 +286,6 @@ if [[ $_result_code -ne 0 ]]; then
     done
 else
     _phase=log-retention
-    find "$LOGS_DIR" -name '*.log' -mtime +32 -print -delete
+    find "$_logs_dir" -name '*.log' -mtime +32 -print -delete
 fi
 exit "$_result_code"

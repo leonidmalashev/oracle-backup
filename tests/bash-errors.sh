@@ -117,12 +117,22 @@ expect_status 2 bash "$scripts/job-runner.sh" unexpected
 expect_ok bash "$scripts/rman-backup.sh" --help
 grep -q -- '--dry-run' "$test_dir/console"
 ! grep -q 'RMAN job finished' "$test_dir/console"
+expect_ok bash "$scripts/rman-backup.sh" --version
+grep -qx 'Version unavailable: install from git archive' "$test_dir/console"
 expect_ok bash "$scripts/job-runner.sh" --help
 grep -q -- '--dry-run' "$test_dir/console"
-for option in -s -t -v -h; do
+expect_ok bash "$scripts/job-runner.sh" --version
+grep -qx 'Version unavailable: install from git archive' "$test_dir/console"
+for version_spec in 'rman-backup.sh RMAN_BACKUP_GIT_ARCHIVE' 'job-runner.sh JOB_RUNNER_GIT_ARCHIVE'; do
+    read -r script marker <<< "$version_spec"
+    sed -i "s|^# $marker:.*|# $marker: Last commit: abc123 at 2026-09-29T12:30:00+03:00|" "$scripts/$script"
+    expect_ok bash "$scripts/$script" --version
+    grep -qx 'Last commit: abc123 at 2026-09-29T12:30:00+03:00' "$test_dir/console"
+done
+for option in -s -t -v -V -h; do
     expect_status 2 bash "$scripts/rman-backup.sh" "$option"
 done
-for option in -n -j -p -v -h; do
+for option in -n -j -p -v -V -h; do
     expect_status 2 bash "$scripts/job-runner.sh" "$option"
 done
 echo 'PASS: short options are rejected'

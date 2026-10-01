@@ -3,13 +3,13 @@
 # job-runner.sh - ?????? ??????? ???????
 # --
 # $Id: job-runner.sh leonid.malashev@gmail.com $
+# JOB_RUNNER_GIT_ARCHIVE: $Format:Last commit: %h at %cI$
 #-------------------------------------------------------------------------------
 #set -x
 set -Eeuo pipefail
 _started_at=$SECONDS
 
 USAGE="Usage: $(basename "$0") --logs-dir=DIR --job-name=NAME --job-script=SCRIPT [--job-args='ARGUMENTS'] [--silent] [--dry-run]"
-_verbose=false
 _silent=false
 _dry_run=false
 _job_name=""
@@ -21,18 +21,10 @@ _signal=""
 _job_started=false
 _lock_name=""
 _rman_sid=""
-_rman_task=""
 _rman_group_lock_name=""
 _rman_group_lock_mode=""
 POSITIONAL_ARGS=()
 job_args=()
-
-require_value() {
-    if [[ $# -lt 2 ]]; then
-        printf 'ERROR: Option %s requires a value\n%s\n' "$1" "$USAGE" >&2
-        exit 2
-    fi
-}
 
 print_help() {
     cat << EOF
@@ -45,6 +37,7 @@ Options:
       --logs-dir=DIR        Directory for job-runner logs.
       --silent              Suppress console output; keep routine log entries and errors.
       --dry-run             Show what would run. For rman-backup.sh, passed through.
+      --version             Show the version embedded by git archive.
       --help                Show this help.
 
 RMAN jobs:
@@ -52,6 +45,19 @@ RMAN jobs:
   Their lock key is rman-backup.<SID>.<task>.
   The maintenance task also takes an exclusive per-SID lock against all RMAN tasks.
 EOF
+}
+
+print_version() {
+    local script_path=${BASH_SOURCE[0]}
+    local archive_version archive_marker='$'
+
+    archive_version=$(sed -n 's/^# JOB_RUNNER_GIT_ARCHIVE: //p' "$script_path")
+    archive_marker+='Format:'
+    if [[ ${archive_version:0:8} == "$archive_marker" ]]; then
+        printf '%s\n' 'Version unavailable: install from git archive'
+    else
+        printf '%s\n' "$archive_version"
+    fi
 }
 
 log_info() {
@@ -178,7 +184,6 @@ derive_lock_name() {
             exit 2
         fi
         _rman_sid=$sid
-        _rman_task=$task
         _rman_group_lock_name="rman-maintenance.${sid}"
         if [[ $task == maintenance ]]; then
             _rman_group_lock_mode=exclusive
@@ -232,6 +237,7 @@ while [[ $# -gt 0 ]]; do
   esac
   case $1 in
     --help)          print_help; exit 0 ;;
+    --version)       print_version; exit 0 ;;
     --silent)        _silent=true;     shift ;;
     --dry-run)       _dry_run=true;    shift ;;
     --job-name=*)    _job_name="${1#*=}";   shift ;;
