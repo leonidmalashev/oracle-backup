@@ -70,6 +70,15 @@ expect_status() {
 expect_ok() {
     "$@" > "$test_dir/console" 2>&1
 }
+assert_script_version() {
+    local script=$1 marker=$2 expected
+    expected=$(sed -n "s/^# ${marker}: //p" "$scripts/$script")
+    if [[ $expected == '$Format:'* ]]; then
+        expected='Version unavailable: install from git archive'
+    fi
+    expect_ok bash "$scripts/$script" --version
+    grep -Fqx -- "$expected" "$test_dir/console"
+}
 assert_temp_empty() {
     [[ -z $(find "$TMPDIR" -mindepth 1 -print -quit) ]]
 }
@@ -117,12 +126,10 @@ expect_status 2 bash "$scripts/job-runner.sh" unexpected
 expect_ok bash "$scripts/rman-backup.sh" --help
 grep -q -- '--dry-run' "$test_dir/console"
 ! grep -q 'RMAN job finished' "$test_dir/console"
-expect_ok bash "$scripts/rman-backup.sh" --version
-grep -qx 'Version unavailable: install from git archive' "$test_dir/console"
+assert_script_version rman-backup.sh RMAN_BACKUP_GIT_ARCHIVE
 expect_ok bash "$scripts/job-runner.sh" --help
 grep -q -- '--dry-run' "$test_dir/console"
-expect_ok bash "$scripts/job-runner.sh" --version
-grep -qx 'Version unavailable: install from git archive' "$test_dir/console"
+assert_script_version job-runner.sh JOB_RUNNER_GIT_ARCHIVE
 for version_spec in 'rman-backup.sh RMAN_BACKUP_GIT_ARCHIVE' 'job-runner.sh JOB_RUNNER_GIT_ARCHIVE'; do
     read -r script marker <<< "$version_spec"
     sed -i "s|^# $marker:.*|# $marker: Last commit: abc123 at 2026-09-29T12:30:00+03:00|" "$scripts/$script"
