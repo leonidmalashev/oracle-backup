@@ -44,7 +44,7 @@ Supported RMAN tasks:
 
 ## Direct RMAN Wrapper Usage
 
-Both scripts support `--version` and print the revision embedded when installed from a Git archive.
+Both scripts support `--version` and print the nearest Git tag, short commit hash, and commit date embedded in `rman-backup.sh` when installed from a Git archive. An ordinary checkout, or an archive with no reachable tag, reports `Version unavailable: install from git archive`. `job-runner.sh` reads the embedded value from the sibling `rman-backup.sh`; keep the two scripts together.
 
 ```bash
 cd /home/oracle/oracle-backup

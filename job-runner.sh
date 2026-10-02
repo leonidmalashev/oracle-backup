@@ -3,7 +3,6 @@
 # job-runner.sh - ?????? ??????? ???????
 # --
 # $Id: job-runner.sh leonid.malashev@gmail.com $
-# JOB_RUNNER_GIT_ARCHIVE: $Format:Last commit: %h at %cI$
 #-------------------------------------------------------------------------------
 #set -x
 set -Eeuo pipefail
@@ -37,7 +36,7 @@ Options:
       --logs-dir=DIR        Directory for job-runner logs.
       --silent              Suppress console output; keep routine log entries and errors.
       --dry-run             Show what would run. For rman-backup.sh, passed through.
-      --version             Show the version embedded by git archive.
+      --version             Show the embedded tag, commit, and date.
       --help                Show this help.
 
 RMAN jobs:
@@ -48,15 +47,22 @@ EOF
 }
 
 print_version() {
-    local script_path=${BASH_SOURCE[0]}
-    local archive_version archive_marker='$'
+    local script_dir version_source version_info version commit date
 
-    archive_version=$(sed -n 's/^# JOB_RUNNER_GIT_ARCHIVE: //p' "$script_path")
-    archive_marker+='Format:'
-    if [[ ${archive_version:0:8} == "$archive_marker" ]]; then
+    script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || {
         printf '%s\n' 'Version unavailable: install from git archive'
+        return
+    }
+    version_source="$script_dir/rman-backup.sh"
+    version_info=$(sed -n 's/^# ORACLE_BACKUP_VERSION: //p' \
+        "$version_source" 2>/dev/null) || version_info=
+    IFS='|' read -r version commit date <<< "$version_info"
+    if [[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ &&
+          $commit =~ ^[0-9a-f]{7,40}$ &&
+          $date =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([+-][0-9]{2}:[0-9]{2}|Z)$ ]]; then
+        printf '%s (commit %s, %s)\n' "$version" "$commit" "$date"
     else
-        printf '%s\n' "$archive_version"
+        printf '%s\n' 'Version unavailable: install from git archive'
     fi
 }
 

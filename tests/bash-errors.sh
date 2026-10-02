@@ -22,7 +22,8 @@ trap cleanup EXIT
 scripts="$test_dir/scripts with spaces"
 mkdir -p "$scripts" "$test_dir/bin" "$test_dir/oracle home/bin" "$test_dir/temp files"
 cp -- "$project_dir/job-runner.sh" "$project_dir/rman-backup.sh" \
-    "$project_dir/rman-backup.conf" "$project_dir/rman-backup.orcl.conf" "$scripts/"
+    "$project_dir/README.md" "$project_dir/rman-backup.conf" \
+    "$project_dir/rman-backup.orcl.conf" "$scripts/"
 printf '# Test configuration\n' > "$scripts/job-runner.conf"
 cat > "$test_dir/bin/oraenv" <<'ORAENV'
 # Deliberately inspect an unset variable, like third-party environment scripts.
@@ -71,11 +72,7 @@ expect_ok() {
     "$@" > "$test_dir/console" 2>&1
 }
 assert_script_version() {
-    local script=$1 marker=$2 expected
-    expected=$(sed -n "s/^# ${marker}: //p" "$scripts/$script")
-    if [[ $expected == '$Format:'* ]]; then
-        expected='Version unavailable: install from git archive'
-    fi
+    local script=$1 expected='Version unavailable: install from git archive'
     expect_ok bash "$scripts/$script" --version
     grep -Fqx -- "$expected" "$test_dir/console"
 }
@@ -126,16 +123,45 @@ expect_status 2 bash "$scripts/job-runner.sh" unexpected
 expect_ok bash "$scripts/rman-backup.sh" --help
 grep -q -- '--dry-run' "$test_dir/console"
 ! grep -q 'RMAN job finished' "$test_dir/console"
-assert_script_version rman-backup.sh RMAN_BACKUP_GIT_ARCHIVE
+assert_script_version rman-backup.sh
 expect_ok bash "$scripts/job-runner.sh" --help
 grep -q -- '--dry-run' "$test_dir/console"
-assert_script_version job-runner.sh JOB_RUNNER_GIT_ARCHIVE
-for version_spec in 'rman-backup.sh RMAN_BACKUP_GIT_ARCHIVE' 'job-runner.sh JOB_RUNNER_GIT_ARCHIVE'; do
-    read -r script marker <<< "$version_spec"
-    sed -i "s|^# $marker:.*|# $marker: Last commit: abc123 at 2026-09-29T12:30:00+03:00|" "$scripts/$script"
-    expect_ok bash "$scripts/$script" --version
-    grep -qx 'Last commit: abc123 at 2026-09-29T12:30:00+03:00' "$test_dir/console"
+assert_script_version job-runner.sh
+for version in '' 'not a version'; do
+    sed -i "s|^# ORACLE_BACKUP_VERSION:.*|# ORACLE_BACKUP_VERSION: $version|" "$scripts/rman-backup.sh"
+    for script in rman-backup.sh job-runner.sh; do
+        expect_ok bash "$scripts/$script" --version
+        grep -Fqx 'Version unavailable: install from git archive' "$test_dir/console"
+    done
 done
+cp -- "$project_dir/rman-backup.sh" "$scripts/rman-backup.sh"
+
+# Exercise the real export-subst path in an isolated repository and temporary tag.
+archive_repo="$test_dir/archive-repo"
+mkdir -p "$archive_repo"
+cp -- "$project_dir/.gitattributes" "$project_dir/README.md" \
+    "$project_dir/job-runner.sh" "$project_dir/rman-backup.sh" "$archive_repo/"
+git -C "$archive_repo" init -q
+git -C "$archive_repo" -c user.name='Archive Test' -c user.email=archive-test@example.invalid \
+    add .gitattributes README.md job-runner.sh rman-backup.sh
+git -C "$archive_repo" -c user.name='Archive Test' -c user.email=archive-test@example.invalid \
+    commit -qm 'archive version test'
+git -C "$archive_repo" -c user.name='Archive Test' -c user.email=archive-test@example.invalid \
+    tag -a v1.2.3 -m 'test version tag'
+archive_metadata=$(git -C "$archive_repo" show -s --format='%h|%cI' 'v1.2.3^{commit}')
+IFS='|' read -r archive_commit archive_date <<< "$archive_metadata"
+expected_archive_version="v1.2.3 (commit $archive_commit, $archive_date)"
+archive_tree="$test_dir/tag-archive"
+mkdir -p "$archive_tree"
+git -C "$archive_repo" archive --format=tar --prefix=oracle-backup/ v1.2.3 | tar -xf - -C "$archive_tree"
+chmod 700 "$archive_tree/oracle-backup/job-runner.sh" "$archive_tree/oracle-backup/rman-backup.sh"
+for script in rman-backup.sh job-runner.sh; do
+    expect_ok bash "$archive_tree/oracle-backup/$script" --version
+    grep -Fqx -- "$expected_archive_version" "$test_dir/console"
+done
+! grep -Fq '%(describe:tags)' "$archive_tree/oracle-backup/rman-backup.sh"
+[[ $(grep -Fc '%(describe:tags)' "$project_dir/rman-backup.sh") -eq 1 ]]
+echo 'PASS: checkout fallback and both scripts read the single tag version embedded by git archive'
 for option in -s -t -v -V -h; do
     expect_status 2 bash "$scripts/rman-backup.sh" "$option"
 done

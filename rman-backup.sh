@@ -1,6 +1,6 @@
 #!/bin/bash
 # rman-backup.sh - Oracle RMAN backup launcher.
-# RMAN_BACKUP_GIT_ARCHIVE: $Format:Last commit: %h at %cI$
+# ORACLE_BACKUP_VERSION: $Format:%(describe:tags)|%h|%cI$
 set -Eeuo pipefail
 _started_at=$SECONDS
 
@@ -53,21 +53,23 @@ Options:
       --dry-run             Generate and show the RMAN script and command, then exit.
                             Does not run RMAN, delete logs, or remove temp files.
       --silent              Suppress console output; keep routine log entries and errors.
-      --version             Show the version embedded by git archive.
+      --version             Show the embedded tag, commit, and date.
       --help                Show this help.
 EOF
 }
 
 print_version() {
-    local script_path=${BASH_SOURCE[0]}
-    local archive_version archive_marker='$'
+    local version_info version commit date
 
-    archive_version=$(sed -n 's/^# RMAN_BACKUP_GIT_ARCHIVE: //p' "$script_path")
-    archive_marker+='Format:'
-    if [[ ${archive_version:0:8} == "$archive_marker" ]]; then
-        printf '%s\n' 'Version unavailable: install from git archive'
+    version_info=$(sed -n 's/^# ORACLE_BACKUP_VERSION: //p' \
+        "${BASH_SOURCE[0]}" 2>/dev/null) || version_info=
+    IFS='|' read -r version commit date <<< "$version_info"
+    if [[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ &&
+          $commit =~ ^[0-9a-f]{7,40}$ &&
+          $date =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([+-][0-9]{2}:[0-9]{2}|Z)$ ]]; then
+        printf '%s (commit %s, %s)\n' "$version" "$commit" "$date"
     else
-        printf '%s\n' "$archive_version"
+        printf '%s\n' 'Version unavailable: install from git archive'
     fi
 }
 
