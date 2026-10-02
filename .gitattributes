@@ -1,2 +1,6 @@
 job-runner.sh export-subst
 rman-backup.sh export-subst
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/rman-backup.*.conf export-ignore
+/tests export-ignore
